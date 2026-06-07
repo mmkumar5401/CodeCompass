@@ -16,8 +16,8 @@ When you open Claude Code in this project, it already knows what you've built, w
 **Automatic context at session start**
 Every session begins with the contents of `memory/` injected as context. Claude knows your project before you type your first message.
 
-**Automatic learning at session end**
-Every session ends with Claude extracting new facts from what was discussed and appending them to `memory/learnings.md`. The memory grows with every session.
+**Session metadata logged automatically**
+Every session close writes a lightweight entry to `memory/session_log.md` — timestamp, session ID, and files changed. When you're ready to save what you learned, say **"store my session"** and Claude extracts the key insights natively, with no API cost.
 
 **Code graph always in sync**
 Every file you save is automatically re-ingested into the code graph. Claude always knows the current dependencies, call chains, and structure of your codebase — even mid-session.
@@ -41,7 +41,11 @@ memory/
 
 These files are in the repository. Anyone who clones gets the accumulated context immediately. The `SessionStart` hook injects them automatically — no setup needed beyond cloning.
 
-At the end of every session, the `Stop` hook calls Claude to review what was discussed and appends new learnings. You can also write directly to any `memory/` file at any time.
+Learnings grow in two ways:
+- **Automatic** — every session close logs metadata to `session_log.md` (timestamp, session ID, files changed)
+- **On demand** — say **"store my session"** before closing and Claude writes distilled insights to `learnings.md` natively, zero API cost
+
+You can also write directly to any `memory/` file at any time.
 
 ### Layer 2 — Knowledge graph (Neo4j)
 
@@ -189,7 +193,7 @@ python main.py resolve
 | Hook | When | What it does |
 |---|---|---|
 | `SessionStart` | Every session opens | Reads `memory/*.md`, injects as context |
-| `Stop` | Every session ends | Extracts new facts, appends to `memory/learnings.md` |
+| `Stop` | Every session ends | Logs metadata (timestamp, session ID, files changed) to `session_log.md` |
 | `PostToolUse` (Write/Edit) | Every file save | Re-ingests the changed file into the code graph |
 
 All three are wired in `.claude/settings.json` — they run without any action from you.
@@ -204,7 +208,8 @@ graphrag/
 │   ├── project.md
 │   ├── components.md
 │   ├── decisions.md
-│   └── learnings.md            grows automatically
+│   ├── learnings.md            grows when you say "store my session"
+│   └── session_log.md          auto-logged metadata on every session close
 ├── graph/
 │   ├── query_cli.py            query doc graph (zero cost)
 │   ├── code_query_cli.py       query code graph (deps/impact/trace/tree)
@@ -223,7 +228,7 @@ graphrag/
 │   └── reader_agent.py         Haiku-powered extraction from text chunks
 ├── scripts/
 │   ├── session_start.py        SessionStart hook — loads memory/
-│   ├── auto_memory.py          Stop hook — writes new learnings
+│   ├── auto_memory.py          Stop hook — logs session metadata to session_log.md
 │   └── on_file_change.py       PostToolUse hook — syncs code graph
 ├── agents/
 │   ├── ROUTING.md              when to use which graph tool
@@ -252,7 +257,9 @@ Work — ask questions, edit files, ingest docs
     ↓
 File edits → on_file_change.py → code graph stays in sync
     ↓
-Session ends → auto_memory.py → new learnings written to memory/learnings.md
+"store my session" → Claude writes learnings to memory/learnings.md (zero API cost)
+    ↓
+Session ends → auto_memory.py → timestamp + files logged to session_log.md
     ↓
 Next session → memory/ injected again, graph has new facts
     ↓

@@ -41,13 +41,7 @@ A **knowledge graph** (Neo4j) that stores structured facts as typed relationship
 ## How It Works
 
 ```
-You close a session
-        ↓
-Stop hook fires — Claude reviews the session, extracts new facts
-        ↓
-Learnings written to memory/learnings.md
-        ↓
-You open a new session (any directory, any project)
+You open a session (any directory, any project)
         ↓
 SessionStart hook fires — memory/ injected before your first message
         ↓
@@ -58,9 +52,17 @@ You edit a file
 PostToolUse hook fires — code graph updated instantly
         ↓
 Claude always has current dependency and structure info
+        ↓
+You say "store my session" when it was a productive session
+        ↓
+Claude reviews the conversation, extracts key insights
+        ↓
+Learnings written to memory/learnings.md — zero API cost
+        ↓
+Session closes — Stop hook logs metadata to session_log.md
 ```
 
-Everything is automatic. No commands to run. No context to paste. No re-explaining.
+The automation handles the routine. You control when insights are worth keeping.
 
 ---
 

@@ -162,8 +162,11 @@ Close and reopen Claude Code. The memory spinner should appear. Ask something th
 **Code graph sync (PostToolUse)**
 Edit any `.py` file in the project. The hook runs silently in the background and re-ingests that file. Run `python -m graph.code_query_cli --deps <that file> --project graphrag --plain` — it should reflect your edit.
 
-**Session learnings (Stop)**
-End a session where you discussed something non-trivial. Check `memory/learnings.md` — a dated entry should have been appended. (This uses `claude -p` internally so it takes a few seconds after the session closes.)
+**Session metadata (Stop)**
+End any session. Check `memory/session_log.md` — a timestamped entry listing the session ID and files changed should appear within a few seconds of closing.
+
+**Saving learnings (user-triggered)**
+Before closing a productive session, say **"store my session"** — Claude reviews the conversation, extracts key insights, and appends them to `memory/learnings.md` immediately (no API cost, no subprocess).
 
 ---
 
@@ -178,9 +181,11 @@ You ask questions / make edits
     ↓
 Each file save → on_file_change.py → code graph updated
     ↓
+Say "store my session" (optional) → Claude writes learnings to memory/learnings.md
+    ↓
 Close session
     ↓
-Stop hook fires → auto_memory.py → new learnings written to memory/learnings.md
+Stop hook fires → auto_memory.py → timestamp + files logged to memory/session_log.md
 ```
 
 ---
@@ -226,8 +231,11 @@ The key in `.env` is missing or invalid. Ingest via `ingest_cli.py` requires a v
 **SessionStart hook not firing**
 Open `/hooks` in the Claude Code UI to reload the hook configuration, or restart the session. Hooks only load when the session starts in a directory that had a `.claude/settings.json` when Claude Code launched.
 
-**`memory/learnings.md` not being written after sessions**
-The Stop hook uses the `claude` binary. If your machine installed Claude Code via nvm, the binary path may differ from what `auto_memory.py` expects. Check the `_find_claude()` function in `scripts/auto_memory.py` and add your path to the candidates list.
+**`memory/session_log.md` not being updated after sessions**
+Make sure the Stop hook is wired in `.claude/settings.json` and that `scripts/auto_memory.py` exists. Open `/hooks` in the Claude Code UI to reload hook configuration, then close a session and check again.
+
+**`memory/learnings.md` is empty**
+Learnings are not automatic — they are saved when you say **"store my session"** during a session. The Stop hook only writes metadata to `session_log.md`.
 
 **Code graph is stale after editing files**
 The `on_file_change.py` hook only handles Python files (and other supported extensions). Check `ingestion/code_parser.py` → `SUPPORTED_EXTENSIONS` to see what's covered.
