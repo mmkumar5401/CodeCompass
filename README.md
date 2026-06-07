@@ -59,7 +59,38 @@ NEO4J_PASSWORD=your_password
 
 > For AuraDB, use the URI from your instance dashboard (starts with `neo4j+s://`).
 
-### 5. Verify the connection
+### 5. Register with Claude Code global config (mandatory)
+
+So the knowledge graph is accessible from **any working directory**, add a pointer to your global Claude Code instructions:
+
+```bash
+cat >> ~/.claude/CLAUDE.md << 'EOF'
+
+# Persistent Knowledge Graph (GraphRAG)
+
+A Neo4j knowledge graph at `bolt://localhost:7687` stores persistent memory across all sessions.
+Project root: `/path/to/graphrag`   ← update this to your actual path
+
+**When asked any question about ingested documents, codebases, or past work — query the graph first:**
+```bash
+cd /path/to/graphrag
+python graph/query_cli.py "your question here"
+```
+
+**For code structure questions (impact, deps, call chains):**
+```bash
+python -m graph.code_query_cli --impact "FunctionName" --project <project>
+python -m graph.code_query_cli --deps path/to/file.ts --project <project>
+python -m graph.code_query_cli --tree <project>
+```
+
+Full instructions: /path/to/graphrag/CLAUDE.md
+EOF
+```
+
+> **Why this matters:** Without this step, Claude Code will only have access to the knowledge graph when launched from the graphrag project directory. With it, the graph is queryable from any folder you work in.
+
+### 7. Verify the connection
 
 ```bash
 python graph/query_cli.py --list-nodes
@@ -67,7 +98,7 @@ python graph/query_cli.py --list-nodes
 
 If Neo4j is running and credentials are correct, you'll see `0 nodes in graph:` (empty graph is fine — you haven't ingested anything yet). If you see a connection error, check that Neo4j is started and your `.env` password matches.
 
-### 6. First run
+### 8. First run
 
 Ingest a document and ask a question:
 

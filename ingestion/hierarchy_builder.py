@@ -133,6 +133,16 @@ def _parent_id(folder: FolderNode, project_name: str, project_id: str) -> str:
     return _stable_id(f"folder:{project_name}:{parent_path}")
 
 
+def get_file_id_map(project_name: str, client) -> dict[str, str]:
+    """Reconstruct the {relative_path: node_id} map from the existing graph.
+
+    Used by load-triples to attach entity nodes to File nodes that were
+    written during a previous build_hierarchy call.
+    """
+    records = client.get_file_nodes(project_name)
+    return {r["path"]: r["id"] for r in records}
+
+
 def _stable_id(key: str) -> str:
     """Deterministic UUID from a string key — same key always produces the same ID."""
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, key))

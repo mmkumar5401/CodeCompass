@@ -248,6 +248,13 @@ class CodeGraphClient:
             DETACH DELETE e
         """, project=project, path=file_path)
 
+    def get_file_nodes(self, project: str) -> list[dict]:
+        """Return {id, path} for every File node in a project — used by load-triples."""
+        return self._run_read("""
+            MATCH (f:File {project: $project})
+            RETURN f.id AS id, f.path AS path
+        """, project=project)
+
     def node_count(self) -> int:
         """Return total node count across all types."""
         rows = self._run_read("MATCH (n) RETURN count(n) AS cnt")

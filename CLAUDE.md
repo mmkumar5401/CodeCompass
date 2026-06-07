@@ -158,11 +158,18 @@ python -m graph.code_query_cli --tree <project>
 python -m graph.code_query_cli --cross-project frontend api-service
 ```
 
+> **Note:** Always invoke as `python -m graph.code_query_cli` (not `python graph/code_query_cli.py`) to avoid module import errors.
+
 **When the graph is empty or stale**, ingest first:
 ```bash
 python main.py ingest-code /path/to/repo --project <project>
 # Faster first run (skips Haiku normalization):
 python main.py ingest-code /path/to/repo --project <project> --skip-normalize
+# Native normalization (no API calls — Claude Code does it):
+python main.py ingest-code /path/to/repo --project <project> --dump-triples /tmp/raw.json
+# → I read /tmp/raw.json, normalize it, write /tmp/normalized.json
+python main.py load-triples /tmp/normalized.json --project <project>
+python main.py resolve
 ```
 
 **Keep the graph fresh while editing** — run the file watcher in a separate terminal:
@@ -201,6 +208,27 @@ ingestion/code_normalizer.py   ← Haiku normalization pass
 ingestion/bridge_detector.py   ← cross-project BRIDGE edges
 ingestion/file_watcher.py      ← incremental updates on file change
 graph/neo4j_client.py       ← document graph Neo4j I/O
+
+## Native normalization (no API calls)
+
+Claude Code normalizes raw triples directly — no Haiku, no credits.
+
+```bash
+# 1. Dump raw triples from tree-sitter (builds hierarchy, no Neo4j entity writes)
+python main.py ingest-code /path/to/repo --project <project> --dump-triples /tmp/raw.json
+
+# 2. I read the JSON and apply normalization:
+#    - Drop noise local variables (self, resp, row, pbar, args, data, ...)
+#    - Fix misclassified entity types (os/sys/re/json/... function → module)
+#    - Resolve aliased names to canonical form where obvious from context
+#    - Write corrected triples to /tmp/normalized.json
+
+# 3. Load normalized triples into the graph
+python main.py load-triples /tmp/normalized.json --project <project>
+
+# 4. Merge any duplicate nodes
+python main.py resolve
+```
 ```
 
 ---
@@ -211,7 +239,8 @@ graph/neo4j_client.py       ← document graph Neo4j I/O
 |---|---|---|
 | Answer a code question | `code_query_cli.py` → reason | `code_query_cli.py` → reason |
 | Answer a doc question | `query_cli.py` → reason | `query_cli.py` → reason |
-| Ingest a codebase | `ingest-code --skip-normalize` | `ingest-code` (Haiku normalizes) |
+| Ingest a codebase (no normalize) | `ingest-code --skip-normalize` | `ingest-code` (Haiku normalizes) |
+| Ingest a codebase (native normalize) | `--dump-triples` → I normalize → `load-triples` → `resolve` | same |
 | Ingest a document | Read file → extract → `remember_batch_cli.py` | `ingest_cli.py --file` |
 | Ingest a URL | `fetch_cli.py` → extract → `remember_batch_cli.py` | `ingest_cli.py --url` |
 | Save a discovered fact | `remember_cli.py` or `remember_batch_cli.py` | same |

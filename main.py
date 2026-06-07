@@ -134,15 +134,20 @@ def query(question: str, full_graph: bool = False, agentic: bool = False):
         console.print(Panel(result.answer, title="Answer", border_style="green"))
 
 
-def ingest_code(repo_path: str, project_name: str, skip_normalize: bool = False) -> None:
+def ingest_code(repo_path: str, project_name: str, skip_normalize: bool = False, dump_triples: str | None = None) -> None:
     """Ingest a codebase into the code knowledge graph.
 
     Phase 1: Walk the repo and write the Project → Folder → File skeleton.
     Phase 2: Parse every source file with tree-sitter into CodeTriples.
     Phase 3: Normalize entity names via Haiku (unless --skip-normalize).
     Phase 4: Write all triples to the project graph.
+
+    If dump_triples is a file path, raw triples are written to that JSON file
+    and the ingest stops — no normalization, no Neo4j writes. Use this to let
+    Claude Code normalize the triples natively, then re-load with load-triples.
     """
     import os
+    import json
     from tqdm import tqdm
 
     repo_path = os.path.abspath(repo_path)
@@ -164,6 +169,27 @@ def ingest_code(repo_path: str, project_name: str, skip_normalize: bool = False)
     if not raw_triples:
         console.print("[yellow]No triples extracted — check that the repo contains supported files.[/]")
         client.close()
+        return
+
+    # Dump mode — write raw triples to JSON and stop here
+    if dump_triples:
+        data = [
+            {
+                "from_entity": t.from_entity,
+                "from_type": t.from_type,
+                "relation_type": t.relation_type,
+                "to_entity": t.to_entity,
+                "to_type": t.to_type,
+                "source_file": t.source_file,
+                "line_number": t.line_number,
+            }
+            for t in raw_triples
+        ]
+        with open(dump_triples, "w") as f:
+            json.dump(data, f, indent=2)
+        client.close()
+        console.print(f"[bold green]Dumped {len(raw_triples)} raw triples to:[/] {dump_triples}")
+        console.print("[dim]Normalize them, then run: python main.py load-triples <file> --project <name>[/]")
         return
 
     # Phase 3 — Haiku normalization (optional)
@@ -189,6 +215,49 @@ def ingest_code(repo_path: str, project_name: str, skip_normalize: bool = False)
         f"[bold green]Done.[/] Wrote {written} triples. "
         f"Graph now has {total_nodes} nodes."
     )
+
+
+def load_triples(triples_file: str, project_name: str) -> None:
+    """Load pre-normalized triples from a JSON file into the code graph.
+
+    Pair with --dump-triples: parse → dump → normalize externally → load.
+    """
+    import json
+    from tqdm import tqdm
+    from models.code_types import CodeTriple
+
+    with open(triples_file) as f:
+        data = json.load(f)
+
+    triples = [
+        CodeTriple(
+            from_entity=d["from_entity"],
+            from_type=d["from_type"],
+            relation_type=d["relation_type"],
+            to_entity=d["to_entity"],
+            to_type=d["to_type"],
+            source_file=d["source_file"],
+            line_number=d["line_number"],
+        )
+        for d in data
+    ]
+
+    console.print(f"[bold blue]Loading {len(triples)} triples from:[/] {triples_file}")
+    client = db_router.project_client(project_name)
+
+    # Rebuild file_id_map from the hierarchy already in the graph
+    from ingestion.hierarchy_builder import get_file_id_map
+    file_id_map = get_file_id_map(project_name, client)
+
+    written = 0
+    for triple in tqdm(triples, desc="Writing triples", unit="triple"):
+        file_node_id = file_id_map.get(triple.source_file, "")
+        client.write_code_triple(triple, file_node_id, project_name)
+        written += 1
+
+    total_nodes = client.node_count()
+    client.close()
+    console.print(f"[bold green]Done.[/] Wrote {written} triples. Graph now has {total_nodes} nodes.")
 
 
 def dedupe_edges(dry_run: bool = False) -> None:
@@ -249,6 +318,8 @@ def main():
         console.print("  python main.py ingest [italic]<filepath>[/]")
         console.print("  python main.py ingest-code [italic]<repo_path>[/] --project [italic]<name>[/]")
         console.print("  python main.py ingest-code [italic]<repo_path>[/] --project [italic]<name>[/] --skip-normalize")
+        console.print("  python main.py ingest-code [italic]<repo_path>[/] --project [italic]<name>[/] --dump-triples [italic]<out.json>[/]")
+        console.print("  python main.py load-triples [italic]<triples.json>[/] --project [italic]<name>[/]")
         console.print("  python main.py query [italic]'<question>'[/]")
         console.print("  python main.py query --full-graph [italic]'<question>'[/]")
         console.print("  python main.py query --agentic [italic]'<question>'[/]")
@@ -268,11 +339,28 @@ def main():
         repo_path = args[0]
         project_name = "default"
         skip_normalize = "--skip-normalize" in args
+        dump_triples = None
+        if "--dump-triples" in args:
+            idx = args.index("--dump-triples")
+            if idx + 1 < len(args):
+                dump_triples = args[idx + 1]
         if "--project" in args:
             idx = args.index("--project")
             if idx + 1 < len(args):
                 project_name = args[idx + 1]
-        ingest_code(repo_path, project_name, skip_normalize=skip_normalize)
+        ingest_code(repo_path, project_name, skip_normalize=skip_normalize, dump_triples=dump_triples)
+    elif command == "load-triples":
+        args = sys.argv[2:]
+        if not args:
+            console.print("[red]Usage: python main.py load-triples <triples.json> --project <name>[/]")
+            sys.exit(1)
+        triples_file = args[0]
+        project_name = "default"
+        if "--project" in args:
+            idx = args.index("--project")
+            if idx + 1 < len(args):
+                project_name = args[idx + 1]
+        load_triples(triples_file, project_name)
     elif command == "query":
         args = sys.argv[2:]
         full_graph = "--full-graph" in args
