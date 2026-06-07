@@ -59,9 +59,13 @@ def main() -> None:
         "(a Neo4j knowledge graph memory system for LLMs).\n\n"
         "Extract NEW facts, decisions, or insights discovered in this session "
         "that are worth remembering for future sessions.\n\n"
-        "Return a concise markdown bullet list (or empty string if nothing notable).\n"
+        "OUTPUT RULES — follow exactly:\n"
+        "- Output ONLY a markdown bullet list, nothing else\n"
+        "- Do NOT use any tools — do not write files, do not run commands\n"
+        "- Do NOT explain what you are doing — just output the bullets\n"
+        "- If nothing notable was discovered, output exactly: (none)\n\n"
         "Focus on: design decisions made, problems solved, patterns discovered, "
-        "constraints found, or relationships between components.\n"
+        "constraints found, relationships between components.\n"
         "Skip: routine file edits, obvious code details, things already well-documented.\n"
         "Maximum 8 bullet points. Be specific.\n\n"
         f"Session transcript:\n{transcript}"
@@ -84,7 +88,7 @@ def main() -> None:
         return
 
     text = _extract_result_text(result.stdout).strip()
-    if not text or text in ("", "[]", "None"):
+    if not text or text.strip().lower() in ("", "[]", "none", "(none)"):
         print("[auto_memory] no new learnings this session", file=sys.stderr)
         return
 
@@ -103,26 +107,30 @@ def _append_to_learnings(content: str) -> None:
 
 
 def _get_transcript(session_id: str) -> str:
-    """Find and return last MAX_TRANSCRIPT_CHARS of the session transcript."""
+    """Find and return last MAX_TRANSCRIPT_CHARS of the session transcript.
+
+    Searches all project dirs under ~/.claude/projects/ so the hook works
+    regardless of which directory Claude was opened from.
+    """
     home = Path.home()
-    cwd = os.getcwd()
-    sanitized = cwd.lstrip("/").replace("/", "-")
-    projects_dir = home / ".claude" / "projects" / sanitized
+    projects_root = home / ".claude" / "projects"
 
     transcript_file: Path | None = None
 
-    if session_id and projects_dir.exists():
-        candidate = projects_dir / f"{session_id}.jsonl"
-        if candidate.exists():
+    # Search every project dir for this session's file
+    if session_id and projects_root.exists():
+        for candidate in projects_root.rglob(f"{session_id}.jsonl"):
             transcript_file = candidate
+            break
 
-    if transcript_file is None and projects_dir.exists():
-        files = sorted(
-            projects_dir.glob("*.jsonl"),
+    # Fall back to the most recently modified .jsonl across all project dirs
+    if transcript_file is None and projects_root.exists():
+        all_files = sorted(
+            projects_root.rglob("*.jsonl"),
             key=lambda f: f.stat().st_mtime,
             reverse=True,
         )
-        transcript_file = files[0] if files else None
+        transcript_file = all_files[0] if all_files else None
 
     if transcript_file is None:
         return ""
