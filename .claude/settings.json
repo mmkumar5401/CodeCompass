@@ -1,12 +1,37 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag)/scripts/session_start.py\"",
+            "timeout": 10,
+            "statusMessage": "Loading project memory..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$(git rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag)/scripts/auto_memory.py\"",
+            "timeout": 120,
+            "statusMessage": "Saving session learnings...",
+            "async": true
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "python /Users/manojkumarmuthukumaran/Documents/Work/graphrag/scripts/on_file_change.py --project graphrag --root /Users/manojkumarmuthukumaran/Documents/Work/graphrag"
+            "command": "REPO=$(git rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag) && python \"$REPO/scripts/on_file_change.py\" --project graphrag --root \"$REPO\""
           }
         ]
       }

@@ -3,6 +3,13 @@
 This project is a persistent memory system for LLMs backed by a Neo4j knowledge graph.
 You have full read, write, and ingest access to the graph from here.
 
+## Auto-loaded memory
+
+Project memory is automatically injected at session start from the `memory/` directory.
+You already have that context — do not re-read those files manually.
+After every session, new learnings are automatically appended to `memory/learnings.md`.
+If you discover something worth saving mid-session, write it there directly.
+
 ---
 
 ## Reading the graph
