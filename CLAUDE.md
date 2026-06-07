@@ -7,8 +7,42 @@ You have full read, write, and ingest access to the graph from here.
 
 Project memory is automatically injected at session start from the `memory/` directory.
 You already have that context — do not re-read those files manually.
-After every session, new learnings are automatically appended to `memory/learnings.md`.
-If you discover something worth saving mid-session, write it there directly.
+If you discover something worth saving mid-session, write it to `memory/learnings.md` directly.
+
+---
+
+## Storing a session
+
+When the user says **"store my session"**, **"save session"**, **"store session"**, or anything similar, do all of the following in order:
+
+### 1. Save learnings
+Review this conversation. Extract new facts, decisions, or insights worth remembering in future sessions. Write them to `memory/learnings.md` by appending:
+
+```
+## YYYY-MM-DD
+
+- <specific learning>
+- <specific learning>
+```
+
+Focus on: design decisions made, problems solved, constraints discovered, relationships between components, patterns that emerged.
+Skip: routine file edits, obvious code details, things already in `memory/`.
+Maximum 8 bullets. Be specific.
+
+### 2. Report file changes
+Run:
+```bash
+git diff --name-only HEAD
+```
+List which files changed this session. The code graph is already up to date (every file save triggers `on_file_change.py` automatically).
+
+### 3. Report graph updates
+- **Code graph**: updated automatically on every file save — confirm it's current
+- **Doc graph**: updated synchronously whenever `ingest_cli.py` or `remember_batch_cli.py` was run — confirm if any docs were ingested this session
+- If no docs were ingested, say so
+
+### 4. Confirm
+Print a short summary: how many learnings were saved, which files changed, whether the doc graph was updated.
 
 ---
 
