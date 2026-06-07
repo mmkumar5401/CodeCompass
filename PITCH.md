@@ -59,10 +59,14 @@ Claude reviews the conversation, extracts key insights
         ↓
 Learnings written to memory/learnings.md — zero API cost
         ↓
+Conversation grows long → compaction triggered
+        ↓
+PreCompact hook fires — Claude writes learnings before context is compressed
+        ↓
 Session closes — Stop hook logs metadata to session_log.md
 ```
 
-The automation handles the routine. You control when insights are worth keeping.
+Every path preserves what matters — whether you trigger it, or compaction does.
 
 ---
 

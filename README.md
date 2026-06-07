@@ -193,6 +193,7 @@ python main.py resolve
 | Hook | When | What it does |
 |---|---|---|
 | `SessionStart` | Every session opens | Reads `memory/*.md`, injects as context |
+| `PreCompact` | Before every compaction | Injects instruction — Claude writes learnings to `learnings.md` before context is compressed |
 | `Stop` | Every session ends | Logs metadata (timestamp, session ID, files changed) to `session_log.md` |
 | `PostToolUse` (Write/Edit) | Every file save | Re-ingests the changed file into the code graph |
 
@@ -229,6 +230,7 @@ graphrag/
 ├── scripts/
 │   ├── session_start.py        SessionStart hook — loads memory/
 │   ├── auto_memory.py          Stop hook — logs session metadata to session_log.md
+│   ├── on_compact.py           PreCompact hook — saves learnings before compaction
 │   └── on_file_change.py       PostToolUse hook — syncs code graph
 ├── agents/
 │   ├── ROUTING.md              when to use which graph tool
@@ -258,6 +260,8 @@ Work — ask questions, edit files, ingest docs
 File edits → on_file_change.py → code graph stays in sync
     ↓
 "store my session" → Claude writes learnings to memory/learnings.md (zero API cost)
+    ↓
+Compaction triggered → on_compact.py → Claude writes learnings before context is compressed
     ↓
 Session ends → auto_memory.py → timestamp + files logged to session_log.md
     ↓

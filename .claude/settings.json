@@ -25,6 +25,18 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$(git rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag)/scripts/on_compact.py\"",
+            "timeout": 15,
+            "statusMessage": "Saving learnings before compaction..."
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",

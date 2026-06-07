@@ -168,6 +168,9 @@ End any session. Check `memory/session_log.md` — a timestamped entry listing t
 **Saving learnings (user-triggered)**
 Before closing a productive session, say **"store my session"** — Claude reviews the conversation, extracts key insights, and appends them to `memory/learnings.md` immediately (no API cost, no subprocess).
 
+**Saving learnings before compaction (automatic)**
+When the conversation grows long and Claude Code compacts it, the `PreCompact` hook fires first — Claude writes key learnings to `memory/learnings.md` before the context is compressed. This is fully automatic.
+
 ---
 
 ## What happens every session
@@ -182,6 +185,8 @@ You ask questions / make edits
 Each file save → on_file_change.py → code graph updated
     ↓
 Say "store my session" (optional) → Claude writes learnings to memory/learnings.md
+    ↓
+Compaction (automatic) → on_compact.py → Claude writes learnings before context is compressed
     ↓
 Close session
     ↓
