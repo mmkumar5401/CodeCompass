@@ -5,17 +5,18 @@ from models.types import Triple
 
 
 class Neo4jClient:
-    def __init__(self, uri: str, user: str, password: str):
+    def __init__(self, uri: str, user: str, password: str, database: str | None = None):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        self._database = database  # None → default database (Community compatible)
 
     def write_triple(self, triple: Triple, session_id: str = "ingestion"):
         """MERGE entities and relationship — idempotent.
         Tags each relationship with session_id and created_at on first write."""
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             session.run("""
-                MERGE (a:Entity {id: $from_id})
+                MERGE (a:DocEntity {id: $from_id})
                 SET a.name = $from_name, a.type = $from_type
-                MERGE (b:Entity {id: $to_id})
+                MERGE (b:DocEntity {id: $to_id})
                 SET b.name = $to_name, b.type = $to_type
                 MERGE (a)-[r:RELATION {type: $rel_type}]->(b)
                 SET r.weight = $weight, r.description = $rel_desc,
@@ -44,11 +45,11 @@ class Neo4jClient:
         """
         from_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, from_name.lower()))
         to_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, to_name.lower()))
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             session.run("""
-                MERGE (a:Entity {id: $from_id})
+                MERGE (a:DocEntity {id: $from_id})
                 ON CREATE SET a.name = $from_name, a.type = 'Concept'
-                MERGE (b:Entity {id: $to_id})
+                MERGE (b:DocEntity {id: $to_id})
                 ON CREATE SET b.name = $to_name, b.type = 'Concept'
                 MERGE (a)-[r:RELATION {type: $rel_type}]->(b)
                 ON CREATE SET r.weight    = 1.0,
@@ -71,13 +72,13 @@ class Neo4jClient:
         Re-points all relationships, then detach-deletes each duplicate.
         Does not use APOC — works on any Neo4j instance.
         """
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             for dup_id in duplicate_ids:
                 # Re-point outgoing rels from duplicate → canonical
                 session.run("""
-                    MATCH (dup:Entity {id: $dup_id})-[r:RELATION]->(target:Entity)
+                    MATCH (dup:DocEntity {id: $dup_id})-[r:RELATION]->(target:DocEntity)
                     WHERE target.id <> $canonical_id
-                    MERGE (c:Entity {id: $canonical_id})-[nr:RELATION {type: r.type}]->(target)
+                    MERGE (c:DocEntity {id: $canonical_id})-[nr:RELATION {type: r.type}]->(target)
                     ON CREATE SET nr.weight     = r.weight,
                                   nr.description = r.description,
                                   nr.session_id  = r.session_id,
@@ -86,9 +87,9 @@ class Neo4jClient:
 
                 # Re-point incoming rels from duplicate ← canonical
                 session.run("""
-                    MATCH (source:Entity)-[r:RELATION]->(dup:Entity {id: $dup_id})
+                    MATCH (source:DocEntity)-[r:RELATION]->(dup:DocEntity {id: $dup_id})
                     WHERE source.id <> $canonical_id
-                    MERGE (source)-[nr:RELATION {type: r.type}]->(c:Entity {id: $canonical_id})
+                    MERGE (source)-[nr:RELATION {type: r.type}]->(c:DocEntity {id: $canonical_id})
                     ON CREATE SET nr.weight     = r.weight,
                                   nr.description = r.description,
                                   nr.session_id  = r.session_id,
@@ -97,22 +98,22 @@ class Neo4jClient:
 
                 # Delete the duplicate (DETACH handles any lingering rels)
                 session.run("""
-                    MATCH (dup:Entity {id: $dup_id})
+                    MATCH (dup:DocEntity {id: $dup_id})
                     DETACH DELETE dup
                 """, {"dup_id": dup_id})
 
             # Ensure canonical node name is up to date
             session.run("""
-                MATCH (c:Entity {id: $canonical_id})
+                MATCH (c:DocEntity {id: $canonical_id})
                 SET c.name = $canonical_name
             """, {"canonical_id": canonical_id, "canonical_name": canonical_name})
 
     def get_neighbours(self, node_ids: list[str], exclude_ids: list[str] = None) -> list[dict]:
         """Get all direct neighbours of a set of nodes, optionally excluding already-visited IDs."""
         exclude = list(exclude_ids or [])
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             result = session.run("""
-                MATCH (n:Entity)-[r:RELATION]->(m:Entity)
+                MATCH (n:DocEntity)-[r:RELATION]->(m:DocEntity)
                 WHERE n.id IN $node_ids
                   AND NOT m.id IN $exclude
                 RETURN n.id AS from_id, n.name AS from_name, n.type AS from_type,
@@ -123,17 +124,17 @@ class Neo4jClient:
 
     def get_all_node_names(self) -> list[dict]:
         """Return id, name, type for every node — used by seed finder to ground LLM selection."""
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             result = session.run(
-                "MATCH (n:Entity) RETURN n.id AS id, n.name AS name, n.type AS type ORDER BY n.name"
+                "MATCH (n:DocEntity) RETURN n.id AS id, n.name AS name, n.type AS type ORDER BY n.name"
             )
             return [record.data() for record in result]
 
     def find_nodes_by_name(self, names: list[str]) -> list[dict]:
         """Fuzzy match node names for seed finding"""
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             result = session.run("""
-                MATCH (n:Entity)
+                MATCH (n:DocEntity)
                 WHERE any(name IN $names WHERE toLower(n.name) CONTAINS toLower(name))
                 RETURN n.id AS id, n.name AS name, n.type AS type
                 LIMIT 10
@@ -146,12 +147,12 @@ class Neo4jClient:
         Returns flat rows; group by hop1_id in Python to reconstruct the tree.
         """
         exclude = list(exclude_ids or [])
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             result = session.run("""
-                MATCH (n:Entity)-[r1:RELATION]->(m:Entity)
+                MATCH (n:DocEntity)-[r1:RELATION]->(m:DocEntity)
                 WHERE n.id IN $node_ids
                   AND NOT m.id IN $exclude
-                OPTIONAL MATCH (m)-[r2:RELATION]->(k:Entity)
+                OPTIONAL MATCH (m)-[r2:RELATION]->(k:DocEntity)
                 WHERE NOT k.id IN $exclude
                   AND k.id <> n.id
                 RETURN n.id   AS source_id,  n.name AS source_name,
@@ -164,9 +165,9 @@ class Neo4jClient:
 
     def get_subgraph(self, node_ids: list[str]) -> list[dict]:
         """Retrieve full context for a set of nodes"""
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             result = session.run("""
-                MATCH (n:Entity)-[r:RELATION]->(m:Entity)
+                MATCH (n:DocEntity)-[r:RELATION]->(m:DocEntity)
                 WHERE n.id IN $node_ids OR m.id IN $node_ids
                 RETURN n.name, r.type, m.name, r.description
             """, {"node_ids": node_ids})
@@ -174,9 +175,9 @@ class Neo4jClient:
 
     def get_all_edges(self) -> list[dict]:
         """Return every edge in the graph as compact dicts for full-graph context."""
-        with self.driver.session() as session:
+        with self.driver.session(database=self._database) as session:
             result = session.run("""
-                MATCH (n:Entity)-[r:RELATION]->(m:Entity)
+                MATCH (n:DocEntity)-[r:RELATION]->(m:DocEntity)
                 RETURN n.name AS from_name, n.type AS from_type,
                        r.type AS rel_type, r.description AS rel_desc,
                        m.name AS to_name, m.type AS to_type
@@ -184,8 +185,8 @@ class Neo4jClient:
             return [record.data() for record in result]
 
     def node_count(self) -> int:
-        with self.driver.session() as session:
-            result = session.run("MATCH (n:Entity) RETURN count(n) AS cnt")
+        with self.driver.session(database=self._database) as session:
+            result = session.run("MATCH (n:DocEntity) RETURN count(n) AS cnt")
             return result.single()["cnt"]
 
     def close(self):

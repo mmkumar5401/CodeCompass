@@ -6,3 +6,12 @@ rich>=13.0.0
 tqdm>=4.66.0
 pytest>=7.0.0
 pytest-asyncio>=0.23.0
+
+# Code ingestion pipeline
+tree-sitter>=0.21.0
+tree-sitter-python>=0.21.0
+tree-sitter-javascript>=0.21.0
+tree-sitter-typescript>=0.21.0
+tree-sitter-html>=0.21.0
+tree-sitter-css>=0.21.0
+watchdog>=4.0.0

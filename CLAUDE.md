@@ -133,17 +133,74 @@ Facts written via `remember_cli.py`, `remember_batch_cli.py`, and `ingest_cli.py
 
 ---
 
+## Code graph — answering questions about a codebase
+
+When asked anything about code structure, dependencies, call chains, or impact of a change,
+query the code graph first. Do not read raw source files when the graph can answer it faster.
+
+```bash
+# What would break if I change this function?
+python -m graph.code_query_cli --impact "function_name" --project <project>
+
+# What does this file import (directly and transitively)?
+python -m graph.code_query_cli --deps src/auth/login.py --project <project>
+
+# What CSS rules style this element?
+python -m graph.code_query_cli --styles "LoginForm" --project <project>
+
+# Trace the call chain forward from an entry point
+python -m graph.code_query_cli --trace "main" --project <project> --hops 4
+
+# Print the full folder/file hierarchy
+python -m graph.code_query_cli --tree <project>
+
+# Cross-project bridges (shared schemas, API contracts)
+python -m graph.code_query_cli --cross-project frontend api-service
+```
+
+**When the graph is empty or stale**, ingest first:
+```bash
+python main.py ingest-code /path/to/repo --project <project>
+# Faster first run (skips Haiku normalization):
+python main.py ingest-code /path/to/repo --project <project> --skip-normalize
+```
+
+**Keep the graph fresh while editing** — run the file watcher in a separate terminal:
+```bash
+python -c "
+from graph import db_router
+from ingestion.hierarchy_builder import build_hierarchy
+from ingestion.file_watcher import FileWatcher
+
+project = '<project>'
+root = '/path/to/repo'
+client = db_router.project_client(project)
+file_id_map = build_hierarchy(root, project, client)
+watcher = FileWatcher(root, project, client, file_id_map)
+watcher.start()
+"
+```
+
+---
+
 ## Project structure
 
 ```
-graph/query_cli.py          ← read: retrieve subgraph for questions
+graph/query_cli.py          ← read: retrieve subgraph for document questions
+graph/code_query_cli.py     ← read: code-aware traversal (impact/deps/styles/trace/tree)
 graph/fetch_cli.py          ← fetch: get clean text from a URL (no extraction)
 graph/remember_cli.py       ← write: commit one fact to permanent memory
 graph/remember_batch_cli.py ← write: commit many facts at once (JSON array)
 graph/ingest_cli.py         ← write: API-powered fetch + extract + store
+graph/code_graph_client.py  ← Neo4j client for code graphs (Project/Folder/File/Entity)
+graph/db_router.py          ← routes to master / project / auto database
 query/agentic_agent.py      ← full agentic mode (python main.py query --agentic "...")
-ingestion/                  ← document ingestion pipeline
-graph/neo4j_client.py       ← all Neo4j I/O
+ingestion/code_parser.py    ← tree-sitter extraction (local, no API)
+ingestion/hierarchy_builder.py ← builds Project→Folder→File skeleton
+ingestion/code_normalizer.py   ← Haiku normalization pass
+ingestion/bridge_detector.py   ← cross-project BRIDGE edges
+ingestion/file_watcher.py      ← incremental updates on file change
+graph/neo4j_client.py       ← document graph Neo4j I/O
 ```
 
 ---
@@ -152,8 +209,11 @@ graph/neo4j_client.py       ← all Neo4j I/O
 
 | Goal | Zero API cost | With API credits |
 |---|---|---|
-| Answer a question | `query_cli.py` → reason | `query_cli.py` → reason |
-| Ingest a file | Read file → extract → `remember_batch_cli.py` | `ingest_cli.py --file` |
+| Answer a code question | `code_query_cli.py` → reason | `code_query_cli.py` → reason |
+| Answer a doc question | `query_cli.py` → reason | `query_cli.py` → reason |
+| Ingest a codebase | `ingest-code --skip-normalize` | `ingest-code` (Haiku normalizes) |
+| Ingest a document | Read file → extract → `remember_batch_cli.py` | `ingest_cli.py --file` |
 | Ingest a URL | `fetch_cli.py` → extract → `remember_batch_cli.py` | `ingest_cli.py --url` |
 | Save a discovered fact | `remember_cli.py` or `remember_batch_cli.py` | same |
 | Clean up duplicates | `python main.py resolve` | same |
+| Watch for file changes | `FileWatcher(...).start()` in separate terminal | same |

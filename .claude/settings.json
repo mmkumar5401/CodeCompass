@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /Users/manojkumarmuthukumaran/Documents/Work/graphrag/scripts/on_file_change.py --project graphrag --root /Users/manojkumarmuthukumaran/Documents/Work/graphrag"
+          }
+        ]
+      }
+    ]
+  }
+}
