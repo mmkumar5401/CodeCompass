@@ -1,9 +1,7 @@
-# GraphRAG — Claude Code Instructions
+# GraphRAG — Codex Instructions
 
 This project is a persistent memory system for LLMs backed by a Neo4j knowledge graph.
 You have full read, write, and ingest access to the graph from here.
-
-> **New user / fresh clone?** Follow `CLAUDE_SETUP.md` step by step. It covers Neo4j startup, `.env` config, hook path fixing, codebase ingestion, and global `~/.claude/CLAUDE.md` wiring — with a verification command at every step.
 
 ## Auto-loaded memory
 
@@ -159,34 +157,10 @@ This is how the graph grows with use. Every session should leave the graph sligh
 
 ## Resolving duplicate entities
 
-### Default mode (requires Anthropic API credits — uses Haiku)
 ```bash
 python main.py resolve           # merge duplicate nodes
 python main.py resolve --dry-run # preview without touching the graph
 ```
-
-### Native mode (zero API credits — Claude Code does the analysis)
-
-The `--native` flag is a two-phase workflow: Python handles Neo4j I/O, Claude Code handles the deduplication analysis interactively.
-
-**Phase 1 — dump nodes:**
-```bash
-python main.py resolve --native --dump /tmp/resolve_nodes.json
-```
-This writes all document-graph node names to a JSON file and prints instructions.
-
-**Phase 2 — Claude Code analyzes the file:**
-Ask Claude Code: *"Read /tmp/resolve_nodes.json, find duplicate entity names, write groups to /tmp/resolve_groups.json"*
-
-groups.json format: `[["canonical_name", "duplicate1", "duplicate2"], ...]`
-
-**Phase 3 — apply:**
-```bash
-python main.py resolve --native --apply /tmp/resolve_groups.json
-python main.py resolve --native --apply /tmp/resolve_groups.json --dry-run  # preview first
-```
-
-> **Why not `claude -p` subprocess?** `claude -p` uses the ANTHROPIC_API_KEY (which may have no credits), while the interactive Claude Code session uses the subscription. The two-phase design keeps all LLM work inside the Claude Code session.
 
 ---
 
@@ -196,7 +170,7 @@ Nodes: `(:Entity {id, name, type})`
 Edges: `-[:RELATION {type, weight, session_id, created_at}]->`
 
 Entity IDs are deterministic `uuid5(name.lower())` — same concept across documents = same node.
-Facts written via `remember_cli.py`, `remember_batch_cli.py`, and `ingest_cli.py` are tagged `session_id="claude-code"`.
+Facts written via `remember_cli.py`, `remember_batch_cli.py`, and `ingest_cli.py` are tagged `session_id="Codex"`.
 
 ---
 
@@ -232,7 +206,7 @@ python -m graph.code_query_cli --cross-project frontend api-service
 python main.py ingest-code /path/to/repo --project <project>
 # Faster first run (skips Haiku normalization):
 python main.py ingest-code /path/to/repo --project <project> --skip-normalize
-# Native normalization (no API calls — Claude Code does it):
+# Native normalization (no API calls — Codex does it):
 python main.py ingest-code /path/to/repo --project <project> --dump-triples /tmp/raw.json
 # → I read /tmp/raw.json, normalize it, write /tmp/normalized.json
 python main.py load-triples /tmp/normalized.json --project <project>
@@ -278,7 +252,7 @@ graph/neo4j_client.py       ← document graph Neo4j I/O
 
 ## Native normalization (no API calls)
 
-Claude Code normalizes raw triples directly — no Haiku, no credits.
+Codex normalizes raw triples directly — no Haiku, no credits.
 
 ```bash
 # 1. Dump raw triples from tree-sitter (builds hierarchy, no Neo4j entity writes)
@@ -311,6 +285,5 @@ python main.py resolve
 | Ingest a document | Read file → extract → `remember_batch_cli.py` | `ingest_cli.py --file` |
 | Ingest a URL | `fetch_cli.py` → extract → `remember_batch_cli.py` | `ingest_cli.py --url` |
 | Save a discovered fact | `remember_cli.py` or `remember_batch_cli.py` | same |
-| Clean up duplicates (API) | — | `python main.py resolve` |
-| Clean up duplicates (native) | `resolve --native --dump` → I analyze → `resolve --native --apply` | same |
+| Clean up duplicates | `python main.py resolve` | same |
 | Watch for file changes | `FileWatcher(...).start()` in separate terminal | same |

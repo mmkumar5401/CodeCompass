@@ -18,7 +18,7 @@ from ingestion.code_normalizer import normalize_triples
 from query.agent import run_agent
 from query.graph_context_agent import run_full_graph_agent
 from query.agentic_agent import run_agentic_agent
-from ingestion.entity_resolver import resolve_entities
+from ingestion.entity_resolver import resolve_entities, resolve_dump, resolve_apply
 
 load_dotenv(override=True)
 console = Console()
@@ -324,6 +324,8 @@ def main():
         console.print("  python main.py query --full-graph [italic]'<question>'[/]")
         console.print("  python main.py query --agentic [italic]'<question>'[/]")
         console.print("  python main.py resolve [italic][--dry-run][/]")
+        console.print("  python main.py resolve --native --dump [italic]<nodes.json>[/]")
+        console.print("  python main.py resolve --native --apply [italic]<groups.json>[/] [italic][--dry-run][/]")
         console.print("  python main.py dedupe-edges [italic][--dry-run][/]")
         sys.exit(1)
 
@@ -371,8 +373,31 @@ def main():
             sys.exit(1)
         query(question, full_graph=full_graph, agentic=agentic)
     elif command == "resolve":
-        dry_run = "--dry-run" in sys.argv[2:]
-        resolve(dry_run=dry_run)
+        args = sys.argv[2:]
+        dry_run = "--dry-run" in args
+        if "--native" in args:
+            if "--dump" in args:
+                idx = args.index("--dump")
+                out_file = args[idx + 1] if idx + 1 < len(args) else "/tmp/resolve_nodes.json"
+                graph = get_graph_client()
+                try:
+                    resolve_dump(graph, out_file)
+                finally:
+                    graph.close()
+            elif "--apply" in args:
+                idx = args.index("--apply")
+                groups_file = args[idx + 1] if idx + 1 < len(args) else "/tmp/resolve_groups.json"
+                graph = get_graph_client()
+                try:
+                    merged = resolve_apply(graph, groups_file, dry_run=dry_run)
+                    tag = "would be merged" if dry_run else "merged"
+                    console.print(f"[bold green]Done.[/] {merged} node(s) {tag}.")
+                finally:
+                    graph.close()
+            else:
+                console.print("[red]--native requires --dump <file> or --apply <file>[/]")
+        else:
+            resolve(dry_run=dry_run)
     elif command == "dedupe-edges":
         dry_run = "--dry-run" in sys.argv[2:]
         dedupe_edges(dry_run=dry_run)
