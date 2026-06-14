@@ -1,206 +1,136 @@
-# GraphRAG — Persistent Memory for Claude Code
+# GraphRAG — Code Dependency Index for Claude Code
 
-Claude Code forgets everything when a session ends. GraphRAG gives it a memory that persists across every session, every project, and every machine.
+Answers one question: **what should I read before editing X?**
 
-It works as two layers that run automatically:
-
-- **File memory** (`memory/`) — markdown files injected into Claude at the start of every session. Contains project context, design decisions, and learnings that accumulate over time.
-- **Knowledge graph** (Neo4j) — structured facts stored as typed relationships between entities. Covers both document knowledge (papers, notes, architecture docs) and code structure (files, functions, dependencies).
-
-When you open Claude Code in this project, it already knows what you've built, what decisions you've made, and how your code is wired together — without you having to explain it again.
+It's a Neo4j-backed code dependency index. Ingest a repo once, then ask Claude Code which files to read before touching anything — without blindly exploring.
 
 ---
 
-## What it gives you
-
-**Automatic context at session start**
-Every session begins with the contents of `memory/` injected as context. Claude knows your project before you type your first message.
-
-**Session metadata logged automatically**
-Every session close writes a lightweight entry to `memory/session_log.md` — timestamp, session ID, and files changed. When you're ready to save what you learned, say **"store my session"** and Claude extracts the key insights natively, with no API cost.
-
-**Code graph always in sync**
-Every file you save is automatically re-ingested into the code graph. Claude always knows the current dependencies, call chains, and structure of your codebase — even mid-session.
-
-**46% fewer tokens on code tasks**
-Because Claude navigates directly to the right files instead of exploring blindly, tasks that would normally require reading 3–4 files to orient only require reading 1–2. Measured across realistic edit tasks.
-
----
-
-## How memory works
-
-### Layer 1 — File memory (zero cost, always on)
-
-```
-memory/
-  project.md       project overview, architecture, core value
-  components.md    every script and hook, how to use them
-  decisions.md     design rules accumulated over time
-  learnings.md     session-by-session learnings, auto-appended
-```
-
-These files are in the repository. Anyone who clones gets the accumulated context immediately. The `SessionStart` hook injects them automatically — no setup needed beyond cloning.
-
-Learnings grow in two ways:
-- **Automatic** — every session close logs metadata to `session_log.md` (timestamp, session ID, files changed)
-- **On demand** — say **"store my session"** before closing and Claude writes distilled insights to `learnings.md` natively, zero API cost
-
-You can also write directly to any `memory/` file at any time.
-
-### Layer 2 — Knowledge graph (Neo4j)
-
-Two separate graphs:
-
-**Doc graph** — concepts extracted from papers, documents, architecture notes, and URLs. Stored as typed relationships: `(Entity A) -[:RELATION]-> (Entity B)`. Query it with natural language — no API cost.
+## What it does
 
 ```bash
-python graph/query_cli.py "how does seed finding work?" --hops 2
+# What does this file import (direct + transitive)?
+python -m graph.code_query_cli --deps ingestion/file_watcher.py --project graphrag
+
+# What would break if I change this function?
+python -m graph.code_query_cli --impact "write_code_triple" --project graphrag
+
+# Trace the call chain forward from an entry point
+python -m graph.code_query_cli --trace "main" --project graphrag --hops 4
+
+# Print the full folder/file hierarchy
+python -m graph.code_query_cli --tree graphrag
+
+# See all ingested projects
+python -m graph.code_query_cli --list-projects
 ```
 
-**Code graph** — file structure, imports, function calls, and dependencies for any ingested codebase. Always up to date because every file save triggers re-ingestion.
+Output is plain text by default (agent-friendly). Add `--rich` for formatted tables.
 
-```bash
-python -m graph.code_query_cli --deps graph/query_cli.py --project graphrag --plain
-python -m graph.code_query_cli --impact "Neo4jClient" --project graphrag --plain
-```
+Each result includes `# index updated: <timestamp>`. If the index is older than 24 hours a `WARNING` is printed automatically.
 
 ---
 
 ## Setup
 
 ### Prerequisites
+
 - Python 3.10+
-- Neo4j (Desktop, Docker, or AuraDB — see below)
-- Claude Code CLI installed
+- Docker (for Neo4j)
+- Claude Code CLI
 
-### Neo4j — pick one
-
-**Docker (fastest)**
-```bash
-docker run --name neo4j -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/your_password neo4j:latest
-```
-
-**Neo4j Desktop**
-Download from [neo4j.com/download](https://neo4j.com/download), create a local DBMS, start it.
-
-**AuraDB (cloud, free tier)**
-Sign up at [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura).
-
-### Install
+### Start Neo4j
 
 ```bash
-git clone <repo>
-cd graphrag
-./install.sh
+docker compose up -d
 ```
 
-`install.sh` installs Python dependencies, creates `.env` from the template, verifies the Neo4j connection, and ingests the codebase into the code graph. The doc graph starts empty and grows as you work.
+### Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
 
 ### Configure `.env`
 
-```
-ANTHROPIC_API_KEY=your_key_here
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
+```bash
+cp .env.example .env
+# Edit: set NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, ANTHROPIC_API_KEY
 ```
 
-### Register with Claude Code globally (optional but recommended)
-
-To make the knowledge graph available from **any directory** — not just this one — add it to your global Claude Code config:
+### Ingest a codebase
 
 ```bash
-cat >> ~/.claude/CLAUDE.md << 'EOF'
-
-# Persistent Knowledge Graph (GraphRAG)
-
-A Neo4j knowledge graph stores persistent memory across all sessions.
-Project root: /path/to/graphrag
-
-ALWAYS query the knowledge graph first before answering any question:
-```bash
-cd /path/to/graphrag && python graph/query_cli.py "your question here"
+python main.py ingest-code /path/to/repo --project <name>
 ```
 
-Full instructions: /path/to/graphrag/CLAUDE.md
-EOF
+This writes a `## Code graph` section into the project's `CLAUDE.md` automatically, so Claude Code picks up the graph context on the next session.
+
+### Set up session memory (optional)
+
+```bash
+cp memory/learnings.example.md memory/learnings.md
+```
+
+`memory/learnings.md` is gitignored — your notes stay local. Say **"store my session"** to Claude and it will write distilled insights there automatically. The `PreCompact` hook also saves learnings before context is compressed.
+
+---
+
+## Commands
+
+### `ingest-code`
+
+```bash
+python main.py ingest-code /path/to/repo --project <name>
+
+# With Haiku LLM normalization (slower, cleans up noisy entity names)
+python main.py ingest-code /path/to/repo --project <name> --normalize
+
+# Dump raw triples to JSON for external processing
+python main.py ingest-code /path/to/repo --project <name> --dump-triples /tmp/raw.json
+```
+
+### `watch`
+
+Keep the graph live as you edit files:
+
+```bash
+python main.py watch /path/to/repo --project <name>
+```
+
+Watches for file creates, modifies, deletes, and renames. Incrementally re-ingests only changed files. Writes a PID file to `/tmp/graphrag_watcher_<project>.pid` — the query CLI warns if the watcher isn't running.
+
+### `load-triples`
+
+Load pre-processed triples (e.g. after external normalization):
+
+```bash
+python main.py load-triples /tmp/normalized.json --project <name>
 ```
 
 ---
 
-## Using it
+## How it works
 
-### Ask questions (free, no API cost)
-
-```bash
-claude  # open Claude Code in this directory
+```
+Source files
+    │
+    ▼
+hierarchy_builder.py    — walks repo, writes Project → Folder → File skeleton
+    │
+    ▼
+code_parser.py          — tree-sitter extraction (no API calls)
+    │                     Python, JS, TS, TSX, HTML, CSS, SCSS
+    ▼
+Neo4j                   — typed relationships: [:CALLS], [:IMPORTS],
+                          [:INHERITS], [:STYLES], [:DEFINED_IN], …
+    │
+    ▼
+code_query_cli.py       — traversal queries: --deps, --impact, --trace,
+                          --styles, --tree, --list-projects
 ```
 
-Claude automatically queries the graph before answering. You don't need to run any commands — just ask.
-
-### Add a document to memory
-
-```bash
-# From a local file
-python graph/ingest_cli.py --file path/to/paper.pdf
-
-# From a URL
-python graph/ingest_cli.py --url "https://arxiv.org/abs/2105.00188"
-
-# Override chunk size (default 500 tokens ≈ 2000 chars, 50-token overlap)
-python graph/ingest_cli.py --file path/to/paper.pdf --chunk-size 300 --overlap 30
-```
-
-The document is split into **500-token chunks** (sentence-boundary-aware), entities and relationships are extracted in parallel by Haiku, and everything is written to Neo4j permanently. Future sessions can query it.
-
-**Zero-cost alternative (no API credits):** read the file yourself and write the triples directly:
-
-```bash
-python graph/remember_batch_cli.py '[
-  {"from": "Concept A", "relation": "CAUSES", "to": "Concept B"},
-  {"from": "System X", "relation": "DEPENDS_ON", "to": "System Y"}
-]'
-```
-
-### Add a codebase to the graph
-
-```bash
-python main.py ingest-code /path/to/repo --project myproject --skip-normalize
-```
-
-After this, Claude can answer questions about that codebase's structure without reading files:
-
-```bash
-python -m graph.code_query_cli --tree myproject --plain
-python -m graph.code_query_cli --deps src/auth/login.py --project myproject --plain
-python -m graph.code_query_cli --impact "authenticate" --project myproject --plain
-```
-
-### Save a fact mid-session
-
-```bash
-python graph/remember_cli.py "entity_resolver" "USES" "Claude Haiku"
-```
-
-### Clean up duplicate entities
-
-```bash
-python main.py resolve
-```
-
----
-
-## What runs automatically
-
-| Hook | When | What it does |
-|---|---|---|
-| `SessionStart` | Every session opens | Reads `memory/*.md`, injects as context |
-| `PreCompact` | Before every compaction | Injects instruction — Claude writes learnings to `learnings.md` before context is compressed |
-| `Stop` | Every session ends | Logs metadata (timestamp, session ID, files changed) to `session_log.md` |
-| `PostToolUse` (Write/Edit) | Every file save | Re-ingests the changed file into the code graph |
-
-All three are wired in `.claude/settings.json` — they run without any action from you.
+Typed relationships (not generic `RELATION {type: ...}`) mean variable-length path queries are index-scannable on Neo4j Community Edition.
 
 ---
 
@@ -208,80 +138,45 @@ All three are wired in `.claude/settings.json` — they run without any action f
 
 ```
 graphrag/
-├── memory/                     file-based memory (auto-loaded each session)
-│   ├── project.md
-│   ├── components.md
-│   ├── decisions.md
-│   ├── learnings.md            grows when you say "store my session"
-│   └── session_log.md          auto-logged metadata on every session close
 ├── graph/
-│   ├── query_cli.py            query doc graph (zero cost)
-│   ├── code_query_cli.py       query code graph (deps/impact/trace/tree)
-│   ├── remember_cli.py         write one fact to graph
-│   ├── remember_batch_cli.py   write many facts at once
-│   ├── ingest_cli.py           ingest PDF/URL into doc graph
-│   ├── nav_agent.py            routes task text to the right graph tool
-│   ├── neo4j_client.py         doc graph Neo4j I/O
-│   ├── code_graph_client.py    code graph Neo4j I/O
-│   └── db_router.py            routes to master/project/auto database
+│   ├── code_graph_client.py    Neo4j I/O — nodes, edges, traversal queries
+│   └── code_query_cli.py       CLI — deps / impact / trace / styles / tree
 ├── ingestion/
-│   ├── code_parser.py          tree-sitter extraction (no API)
-│   ├── hierarchy_builder.py    builds Project→Folder→File skeleton
+│   ├── code_parser.py          tree-sitter extraction
+│   ├── hierarchy_builder.py    Project → Folder → File skeleton
 │   ├── file_watcher.py         incremental updates on file change
-│   ├── entity_resolver.py      merges duplicate entities
-│   └── reader_agent.py         Haiku-powered extraction from text chunks
+│   └── code_normalizer.py      optional Haiku normalization pass
+├── memory/
+│   ├── decisions.md            architectural decisions (append-only)
+│   └── learnings.md            session learnings ("store my session")
+├── models/
+│   └── code_types.py           CodeTriple, FileNode, FolderNode
 ├── scripts/
 │   ├── session_start.py        SessionStart hook — loads memory/
-│   ├── auto_memory.py          Stop hook — logs session metadata to session_log.md
-│   ├── on_compact.py           PreCompact hook — saves learnings before compaction
+│   ├── on_compact.py           PreCompact hook — saves learnings
 │   └── on_file_change.py       PostToolUse hook — syncs code graph
-├── agents/
-│   ├── ROUTING.md              when to use which graph tool
-│   ├── CODE.md                 code graph operations
-│   ├── CONCEPT.md              doc graph operations
-│   ├── HYBRID.md               cross-graph (doc ↔ code) operations
-│   └── INGEST.md               adding knowledge to the graph
-├── main.py                     CLI: ingest, ingest-code, query, resolve
-├── CLAUDE.md                   instructions Claude reads when in this project
-├── install.sh                  one-command setup for new clones
+├── config.py                   Neo4j config from .env
+├── main.py                     CLI: ingest-code / load-triples / watch
+├── CLAUDE.md                   instructions for Claude Code
+├── AGENTS.md                   instructions for other agents
+├── docker-compose.yml          Neo4j container
 └── .claude/settings.json       hook configuration
 ```
 
 ---
 
-## The memory loop
+## Automatic CLAUDE.md registration
 
-```
-Clone repo
-    ↓
-./install.sh  (deps + Neo4j check + code graph ingest)
-    ↓
-claude  (SessionStart hook loads memory/ automatically)
-    ↓
-Work — ask questions, edit files, ingest docs
-    ↓
-File edits → on_file_change.py → code graph stays in sync
-    ↓
-"store my session" → Claude writes learnings to memory/learnings.md (zero API cost)
-    ↓
-Compaction triggered → on_compact.py → Claude writes learnings before context is compressed
-    ↓
-Session ends → auto_memory.py → timestamp + files logged to session_log.md
-    ↓
-Next session → memory/ injected again, graph has new facts
-    ↓
-Graph grows smarter with every session
-```
+Every `ingest-code` run writes a `## Code graph` block into the target project's `CLAUDE.md` (creating the file if it doesn't exist). The block is wrapped in HTML comment markers so re-ingesting safely updates it in place.
+
+This means Claude Code automatically picks up the right `--project` name and query commands the next time a session opens in that directory — no manual setup.
 
 ---
 
-## Why a graph instead of a vector store
+## Limitations
 
-Vector stores retrieve similar chunks. A knowledge graph retrieves structured facts and lets you follow typed relationships across them.
-
-This means Claude can:
-- **Follow reasoning chains** — not just find similar text, but traverse `A CAUSES B DEPENDS_ON C`
-- **Connect concepts across documents** that never explicitly reference each other
-- **Know your code structure** — what calls what, what imports what, where things live
-- **Write back new facts** — the graph gets smarter as you use it, not just as you ingest
-- **Navigate without exploring** — go directly to the right file instead of reading several wrong ones first
+- Structure only — the graph knows what calls what, not what anything *means*
+- Supported languages: Python, JS, TS, TSX, HTML, CSS, SCSS
+- External callers (consumers outside the ingested repo) won't appear in `--impact`
+- If Neo4j is down, the CLI prints startup instructions instead of a traceback
+- If the watcher isn't running and files were edited, the CLI warns automatically with the command to start it

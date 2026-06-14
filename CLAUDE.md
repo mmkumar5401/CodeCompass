@@ -88,7 +88,7 @@ Max 8 bullets. Skip routine edits and obvious code details.
 This project is indexed in the GraphRAG code graph as `graphrag`. Query it before editing to know what to read:
 
 ```bash
-cd /Users/manojkumarmuthukumaran/Documents/Work/graphrag
+# Run from the graphrag repo root
 python -m graph.code_query_cli --deps <file> --project graphrag
 python -m graph.code_query_cli --impact "<function>" --project graphrag
 python -m graph.code_query_cli --tree graphrag
@@ -96,6 +96,6 @@ python -m graph.code_query_cli --tree graphrag
 
 Re-ingest after adding files:
 ```bash
-python main.py ingest-code /Users/manojkumarmuthukumaran/Documents/Work/graphrag --project graphrag
+python main.py ingest-code . --project graphrag
 ```
 <!-- graphrag-code-graph-end -->

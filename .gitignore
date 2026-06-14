@@ -34,3 +34,6 @@ benchmarks/results/*.json
 
 # Claude local settings (personal, not for team)
 .claude/settings.local.json
+
+# Personal session notes (copy learnings.example.md → learnings.md after cloning)
+memory/learnings.md

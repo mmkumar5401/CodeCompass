@@ -112,15 +112,13 @@ def _register_project_claude_md(repo_path: str, project_name: str) -> None:
     """
     import os, re
 
-    graphrag_root = os.path.dirname(os.path.abspath(__file__))
-
     block = (
         f"{_GRAPHRAG_START}\n"
         f"## Code graph\n\n"
         f"This project is indexed in the GraphRAG code graph as `{project_name}`. "
         f"Query it before editing to know what to read:\n\n"
         f"```bash\n"
-        f"cd {graphrag_root}\n"
+        f"# Run from your graphrag install directory:\n"
         f"python -m graph.code_query_cli --deps <file> --project {project_name}\n"
         f"python -m graph.code_query_cli --impact \"<function>\" --project {project_name}\n"
         f"python -m graph.code_query_cli --tree {project_name}\n"
