@@ -135,7 +135,12 @@ The graph starts empty except for the code structure ingested in Step 4. Add kno
 ```bash
 python graph/ingest_cli.py --file path/to/paper.pdf
 python graph/ingest_cli.py --url "https://arxiv.org/abs/2105.00188"
+
+# Override chunk size (default 500 tokens ≈ 2000 chars, 50-token overlap)
+python graph/ingest_cli.py --file path/to/paper.pdf --chunk-size 300 --overlap 30
 ```
+
+Text is always split into chunks before extraction. The default is 500 tokens per chunk with sentence-boundary trimming — chunks never cut mid-sentence.
 
 **Write facts directly (free, no API cost)**
 ```bash

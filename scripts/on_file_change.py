@@ -22,7 +22,7 @@ from pathlib import Path
 _GRAPHRAG_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_GRAPHRAG_ROOT))
 
-from graph import db_router
+from graph.code_graph_client import get_client
 from ingestion.code_parser import parse_file, SUPPORTED_EXTENSIONS
 
 # ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ def main() -> None:
     rel_path = os.path.relpath(file_path, repo_root)
     print(f"[graphrag hook] re-ingesting {rel_path}", file=sys.stderr)
 
-    client = db_router.project_client(project)
+    client = get_client(project)
     try:
         # Remove stale entity nodes for this file
         client.delete_file_triples(rel_path, project)

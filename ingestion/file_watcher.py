@@ -6,7 +6,7 @@ is decoupled from the ingestion logic — it only knows how to detect changes
 and hand off file paths.
 
 Usage:
-    watcher = FileWatcher(project_root, project_name, client, master_client)
+    watcher = FileWatcher(project_root, project_name, client, file_id_map)
     watcher.start()
     # ... runs until KeyboardInterrupt or watcher.stop()
 """
@@ -23,7 +23,11 @@ from watchdog.observers import Observer
 
 from graph.code_graph_client import CodeGraphClient
 from ingestion.code_parser import parse_file, SUPPORTED_EXTENSIONS
-from ingestion.bridge_detector import detect_bridges
+
+
+def pid_file_path(project_name: str) -> str:
+    """Return the path of the PID file for a given project's watcher process."""
+    return f"/tmp/graphrag_watcher_{project_name}.pid"
 
 
 # ---------------------------------------------------------------------------
@@ -39,14 +43,12 @@ class _CodeFileEventHandler(FileSystemEventHandler):
         project_name: str,
         client: CodeGraphClient,
         file_id_map: dict[str, str],
-        master_client: Optional[CodeGraphClient] = None,
     ) -> None:
         super().__init__()
         self._project_root = project_root
         self._project_name = project_name
         self._client = client
-        self._file_id_map = file_id_map          # {rel_path: neo4j_file_node_id}
-        self._master_client = master_client
+        self._file_id_map = file_id_map  # {rel_path: neo4j_file_node_id}
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if event.is_directory:
@@ -64,6 +66,16 @@ class _CodeFileEventHandler(FileSystemEventHandler):
         rel_path = os.path.relpath(event.src_path, self._project_root)
         self._remove_file_from_graph(rel_path)
 
+    def on_moved(self, event: FileSystemEvent) -> None:
+        if event.is_directory:
+            return
+        src_rel = os.path.relpath(event.src_path, self._project_root)
+        dest_rel = os.path.relpath(event.dest_path, self._project_root)
+        if any(src_rel.endswith(ext) for ext in SUPPORTED_EXTENSIONS):
+            self._remove_file_from_graph(src_rel)
+        if any(dest_rel.endswith(ext) for ext in SUPPORTED_EXTENSIONS):
+            self._handle_change(event.dest_path)
+
     # ------------------------------------------------------------------
     # Core delta logic
     # ------------------------------------------------------------------
@@ -77,39 +89,23 @@ class _CodeFileEventHandler(FileSystemEventHandler):
         rel_path = os.path.relpath(abs_path, self._project_root)
         print(f"[file_watcher] changed: {rel_path}")
 
-        # 1. Delete all entity nodes sourced from this file
+        # Delete stale entity nodes (File node stays — file still exists)
         self._client.delete_file_triples(rel_path, self._project_name)
 
-        # 2. Re-parse the file into fresh triples
         new_triples = parse_file(abs_path, self._project_root)
         if not new_triples:
             return
 
-        # 3. Write the new triples
         file_node_id = self._file_id_map.get(rel_path, "")
         for triple in new_triples:
             self._client.write_code_triple(triple, file_node_id, self._project_name)
 
         print(f"[file_watcher] wrote {len(new_triples)} triples for {rel_path}")
 
-        # 4. Re-run bridge detection for the affected project if master is available
-        if self._master_client:
-            self._recheck_bridges()
-
     def _remove_file_from_graph(self, rel_path: str) -> None:
-        """Purge all entity nodes for a deleted file."""
-        print(f"[file_watcher] deleted: {rel_path}")
-        self._client.delete_file_triples(rel_path, self._project_name)
-
-    def _recheck_bridges(self) -> None:
-        """Placeholder — full cross-project bridge re-detection on file change.
-
-        In production this would diff only the entities that changed, but
-        for correctness the simplest safe approach is a full re-run after
-        any significant change. Debounce in the caller if this is too slow.
-        """
-        # Bridge detection requires a second client — skip if not configured
-        pass
+        """Purge File node and all entity nodes for a deleted or moved file."""
+        print(f"[file_watcher] removed: {rel_path}")
+        self._client.delete_file(rel_path, self._project_name)
 
 
 # ---------------------------------------------------------------------------
@@ -125,15 +121,14 @@ class FileWatcher:
         project_name: str,
         client: CodeGraphClient,
         file_id_map: dict[str, str],
-        master_client: Optional[CodeGraphClient] = None,
     ) -> None:
         self._project_root = project_root
+        self._pid_file = pid_file_path(project_name)
         self._handler = _CodeFileEventHandler(
             project_root=project_root,
             project_name=project_name,
             client=client,
             file_id_map=file_id_map,
-            master_client=master_client,
         )
         self._observer = Observer()
         self._observer.schedule(self._handler, project_root, recursive=True)
@@ -141,6 +136,7 @@ class FileWatcher:
     def start(self) -> None:
         """Start watching. Blocks until stop() is called or KeyboardInterrupt."""
         self._observer.start()
+        self._write_pid()
         print(f"[file_watcher] watching {self._project_root} — Ctrl-C to stop")
         try:
             while self._observer.is_alive():
@@ -152,4 +148,18 @@ class FileWatcher:
         """Stop the observer and wait for it to finish."""
         self._observer.stop()
         self._observer.join()
+        self._remove_pid()
         print("[file_watcher] stopped")
+
+    def _write_pid(self) -> None:
+        try:
+            with open(self._pid_file, "w") as f:
+                f.write(str(os.getpid()))
+        except OSError:
+            pass
+
+    def _remove_pid(self) -> None:
+        try:
+            os.unlink(self._pid_file)
+        except OSError:
+            pass

@@ -1,289 +1,79 @@
-# GraphRAG — Codex Instructions
+# GraphRAG — Agent Instructions
 
-This project is a persistent memory system for LLMs backed by a Neo4j knowledge graph.
-You have full read, write, and ingest access to the graph from here.
+This tool answers one question: **what should I read before editing X?**
 
-## Auto-loaded memory
-
-Project memory is automatically injected at session start from the `memory/` directory.
-You already have that context — do not re-read those files manually.
-If you discover something worth saving mid-session, write it to `memory/learnings.md` directly.
+It's a dependency index backed by Neo4j. Source files are authoritative; the graph is a stale-tolerant index that degrades gracefully.
 
 ---
 
-## Storing a session
-
-When the user says **"store my session"**, **"save session"**, **"store session"**, or anything similar, do all of the following in order:
-
-### 1. Save learnings
-Review this conversation. Extract new facts, decisions, or insights worth remembering in future sessions. Write them to `memory/learnings.md` by appending:
-
-```
-## YYYY-MM-DD
-
-- <specific learning>
-- <specific learning>
-```
-
-Focus on: design decisions made, problems solved, constraints discovered, relationships between components, patterns that emerged.
-Skip: routine file edits, obvious code details, things already in `memory/`.
-Maximum 8 bullets. Be specific.
-
-### 2. Report file changes
-Run:
-```bash
-git diff --name-only HEAD
-```
-List which files changed this session. The code graph is already up to date (every file save triggers `on_file_change.py` automatically).
-
-### 3. Report graph updates
-- **Code graph**: updated automatically on every file save — confirm it's current
-- **Doc graph**: updated synchronously whenever `ingest_cli.py` or `remember_batch_cli.py` was run — confirm if any docs were ingested this session
-- If no docs were ingested, say so
-
-### 4. Confirm
-Print a short summary: how many learnings were saved, which files changed, whether the doc graph was updated.
-
----
-
-## Reading the graph
-
-When asked any question about the knowledge graph, run the retrieval tool first:
+## 1. Setup
 
 ```bash
-cd /Users/manojkumarmuthukumaran/Documents/Work/graphrag
-python graph/query_cli.py "your question here"
-```
+# Start Neo4j (Docker)
+docker compose up -d
 
-This returns seed nodes and a subgraph of edges. Reason over those edges to answer the question.
-Do not hallucinate facts — if the graph doesn't contain enough information, say so.
+# Configure credentials
+cp .env.example .env
+# Edit .env: set NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, ANTHROPIC_API_KEY
 
-**Options:**
-```bash
-# More hops for broader questions
-python graph/query_cli.py "question" --hops 3
-
-# Specific seed nodes (skip keyword search)
-python graph/query_cli.py --seeds "Ripple Propagation,Knowledge Tracing"
-
-# See all nodes in the graph
-python graph/query_cli.py --list-nodes
+# Ingest a codebase (plain text output, no LLM normalization)
+python main.py ingest-code /path/to/repo --project <name>
 ```
 
 ---
 
-## Ingesting new sources — two modes
-
-### Mode 1: Native extraction (zero API credits, YOU do the extraction)
-
-Use this when Anthropic API credits are unavailable or you want zero cost.
-You read the content and extract the triples yourself, then write them in one batch call.
-
-**For a local file:**
-1. Read the file directly using your Read tool
-2. Extract all meaningful entities and relationships from the content
-3. Write them all at once:
-```bash
-python graph/remember_batch_cli.py '[
-  {"from": "Entity A", "relation": "RELATION_TYPE", "to": "Entity B"},
-  {"from": "Entity B", "relation": "DEPENDS_ON", "to": "Entity C"}
-]'
-```
-
-**For a URL:**
-1. Fetch and print the clean text (arxiv abstract pages auto-redirect to PDF):
-```bash
-python graph/fetch_cli.py "https://arxiv.org/abs/2105.00188"
-```
-2. Read the output, extract all meaningful entities and relationships
-3. Write them all at once with `remember_batch_cli.py` as above
-
-**Extraction rules:**
-- Entities: concrete nouns, concepts, people, systems, components, algorithms
-- Relations: ALL_CAPS_UNDERSCORES — CAUSES, DEPENDS_ON, HAS_COMPONENT, EXTENDS, IS_A, USED_BY, GOVERNS, etc.
-- Only extract clear, explicit relationships — not vague associations
-- Use consistent entity names (same concept = same name every time)
-- Be thorough — extract as many valid triples as you can find in the text
-
-After writing, explore what was added:
-```bash
-python graph/query_cli.py --seeds "Entity A,Entity B"
-```
-
-### Mode 2: API-powered extraction (Haiku extracts, requires Anthropic API credits)
+## 2. Query
 
 ```bash
-# From a URL (arxiv abstract pages are automatically redirected to PDF)
-python graph/ingest_cli.py --url "https://arxiv.org/abs/2105.00188"
+# What should I read before editing this file?
+python -m graph.code_query_cli --deps src/auth/login.py --project <name>
 
-# From a local file
-python graph/ingest_cli.py --file path/to/document.pdf
-python graph/ingest_cli.py --file path/to/document.txt
-
-# From raw text
-python graph/ingest_cli.py --text "The ripple matrix governs propagation..."
-```
-
-Use this when credits are available and the document is large (many chunks benefit from parallel Haiku extraction).
-
----
-
-## Memory update — do this after EVERY response
-
-After answering any question or completing any task, always do this:
-
-1. Review what you just reasoned over — the graph edges, any fetched content, any new connections you noticed
-2. Identify relationships that are **new and not already in the graph**
-3. If you found any, write them immediately:
-
-```bash
-python graph/remember_batch_cli.py '[
-  {"from": "Entity A", "relation": "RELATION_TYPE", "to": "Entity B"},
-  {"from": "Entity C", "relation": "EXTENDS", "to": "Entity D"}
-]'
-```
-
-If you found nothing new, skip this step — don't write duplicates.
-
-This is how the graph grows with use. Every session should leave the graph slightly smarter than it was.
-
-**Rules:**
-- Only commit facts directly supported by content you've read — not speculation
-- Do not connect entities from different domains unless an explicit link exists
-- Do not duplicate facts already present in the graph
-- Use ALL_CAPS_UNDERSCORES for relation types
-
----
-
-## Resolving duplicate entities
-
-```bash
-python main.py resolve           # merge duplicate nodes
-python main.py resolve --dry-run # preview without touching the graph
-```
-
----
-
-## Graph schema
-
-Nodes: `(:Entity {id, name, type})`
-Edges: `-[:RELATION {type, weight, session_id, created_at}]->`
-
-Entity IDs are deterministic `uuid5(name.lower())` — same concept across documents = same node.
-Facts written via `remember_cli.py`, `remember_batch_cli.py`, and `ingest_cli.py` are tagged `session_id="Codex"`.
-
----
-
-## Code graph — answering questions about a codebase
-
-When asked anything about code structure, dependencies, call chains, or impact of a change,
-query the code graph first. Do not read raw source files when the graph can answer it faster.
-
-```bash
-# What would break if I change this function?
-python -m graph.code_query_cli --impact "function_name" --project <project>
-
-# What does this file import (directly and transitively)?
-python -m graph.code_query_cli --deps src/auth/login.py --project <project>
-
-# What CSS rules style this element?
-python -m graph.code_query_cli --styles "LoginForm" --project <project>
-
-# Trace the call chain forward from an entry point
-python -m graph.code_query_cli --trace "main" --project <project> --hops 4
+# What breaks if I change this function?
+python -m graph.code_query_cli --impact "write_code_triple" --project <name>
 
 # Print the full folder/file hierarchy
-python -m graph.code_query_cli --tree <project>
+python -m graph.code_query_cli --tree <name>
 
-# Cross-project bridges (shared schemas, API contracts)
-python -m graph.code_query_cli --cross-project frontend api-service
+# Trace the call chain forward from a function
+python -m graph.code_query_cli --trace "main" --project <name> --hops 4
+
+# What CSS selectors style this element?
+python -m graph.code_query_cli --styles "LoginForm" --project <name>
 ```
 
-> **Note:** Always invoke as `python -m graph.code_query_cli` (not `python graph/code_query_cli.py`) to avoid module import errors.
+Output is plain text by default. Add `--rich` for formatted tables (human use only).
 
-**When the graph is empty or stale**, ingest first:
+> Always invoke as `python -m graph.code_query_cli` (not `python graph/code_query_cli.py`) to avoid module import errors.
+
+---
+
+## 3. If the graph is empty or stale
+
+Re-run ingest-code:
+
 ```bash
-python main.py ingest-code /path/to/repo --project <project>
-# Faster first run (skips Haiku normalization):
-python main.py ingest-code /path/to/repo --project <project> --skip-normalize
-# Native normalization (no API calls — Codex does it):
-python main.py ingest-code /path/to/repo --project <project> --dump-triples /tmp/raw.json
-# → I read /tmp/raw.json, normalize it, write /tmp/normalized.json
-python main.py load-triples /tmp/normalized.json --project <project>
-python main.py resolve
+python main.py ingest-code /path/to/repo --project <name>
 ```
 
-**Keep the graph fresh while editing** — run the file watcher in a separate terminal:
-```bash
-python -c "
-from graph import db_router
-from ingestion.hierarchy_builder import build_hierarchy
-from ingestion.file_watcher import FileWatcher
+To keep the graph fresh while editing, run the watcher in a separate terminal:
 
-project = '<project>'
-root = '/path/to/repo'
-client = db_router.project_client(project)
-file_id_map = build_hierarchy(root, project, client)
-watcher = FileWatcher(root, project, client, file_id_map)
-watcher.start()
-"
+```bash
+python main.py watch /path/to/repo --project <name>
+```
+
+To dump raw triples for external normalization instead of writing directly:
+
+```bash
+python main.py ingest-code /path/to/repo --project <name> --dump-triples /tmp/raw.json
+# normalize /tmp/raw.json externally, then:
+python main.py load-triples /tmp/normalized.json --project <name>
 ```
 
 ---
 
-## Project structure
+## Notes
 
-```
-graph/query_cli.py          ← read: retrieve subgraph for document questions
-graph/code_query_cli.py     ← read: code-aware traversal (impact/deps/styles/trace/tree)
-graph/fetch_cli.py          ← fetch: get clean text from a URL (no extraction)
-graph/remember_cli.py       ← write: commit one fact to permanent memory
-graph/remember_batch_cli.py ← write: commit many facts at once (JSON array)
-graph/ingest_cli.py         ← write: API-powered fetch + extract + store
-graph/code_graph_client.py  ← Neo4j client for code graphs (Project/Folder/File/Entity)
-graph/db_router.py          ← routes to master / project / auto database
-query/agentic_agent.py      ← full agentic mode (python main.py query --agentic "...")
-ingestion/code_parser.py    ← tree-sitter extraction (local, no API)
-ingestion/hierarchy_builder.py ← builds Project→Folder→File skeleton
-ingestion/code_normalizer.py   ← Haiku normalization pass
-ingestion/bridge_detector.py   ← cross-project BRIDGE edges
-ingestion/file_watcher.py      ← incremental updates on file change
-graph/neo4j_client.py       ← document graph Neo4j I/O
-
-## Native normalization (no API calls)
-
-Codex normalizes raw triples directly — no Haiku, no credits.
-
-```bash
-# 1. Dump raw triples from tree-sitter (builds hierarchy, no Neo4j entity writes)
-python main.py ingest-code /path/to/repo --project <project> --dump-triples /tmp/raw.json
-
-# 2. I read the JSON and apply normalization:
-#    - Drop noise local variables (self, resp, row, pbar, args, data, ...)
-#    - Fix misclassified entity types (os/sys/re/json/... function → module)
-#    - Resolve aliased names to canonical form where obvious from context
-#    - Write corrected triples to /tmp/normalized.json
-
-# 3. Load normalized triples into the graph
-python main.py load-triples /tmp/normalized.json --project <project>
-
-# 4. Merge any duplicate nodes
-python main.py resolve
-```
-```
-
----
-
-## Workflow summary
-
-| Goal | Zero API cost | With API credits |
-|---|---|---|
-| Answer a code question | `code_query_cli.py` → reason | `code_query_cli.py` → reason |
-| Answer a doc question | `query_cli.py` → reason | `query_cli.py` → reason |
-| Ingest a codebase (no normalize) | `ingest-code --skip-normalize` | `ingest-code` (Haiku normalizes) |
-| Ingest a codebase (native normalize) | `--dump-triples` → I normalize → `load-triples` → `resolve` | same |
-| Ingest a document | Read file → extract → `remember_batch_cli.py` | `ingest_cli.py --file` |
-| Ingest a URL | `fetch_cli.py` → extract → `remember_batch_cli.py` | `ingest_cli.py --url` |
-| Save a discovered fact | `remember_cli.py` or `remember_batch_cli.py` | same |
-| Clean up duplicates | `python main.py resolve` | same |
-| Watch for file changes | `FileWatcher(...).start()` in separate terminal | same |
+- Each query result includes `# index updated: <timestamp>`. If older than 24 hours, a `WARNING` line is printed automatically — re-run `ingest-code` to refresh.
+- If Neo4j is not running, queries print a clear error with startup instructions (`docker compose up -d`) instead of a Python traceback.
+- Write to `memory/decisions.md` when you make a non-obvious architectural decision. Plain Markdown, dated entries, searched with `rg`.
+- Do not write graph triples after every response — the file watcher handles incremental updates automatically.

@@ -147,9 +147,12 @@ python graph/ingest_cli.py --file path/to/paper.pdf
 
 # From a URL
 python graph/ingest_cli.py --url "https://arxiv.org/abs/2105.00188"
+
+# Override chunk size (default 500 tokens ≈ 2000 chars, 50-token overlap)
+python graph/ingest_cli.py --file path/to/paper.pdf --chunk-size 300 --overlap 30
 ```
 
-The document is chunked, entities and relationships are extracted, and everything is written to Neo4j permanently. Future sessions can query it.
+The document is split into **500-token chunks** (sentence-boundary-aware), entities and relationships are extracted in parallel by Haiku, and everything is written to Neo4j permanently. Future sessions can query it.
 
 **Zero-cost alternative (no API credits):** read the file yourself and write the triples directly:
 

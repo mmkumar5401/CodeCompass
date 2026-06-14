@@ -1,10 +1,9 @@
+# Source files are authoritative; this graph is a stale-tolerant index that degrades gracefully.
 """Neo4j client for code knowledge graphs.
 
 Handles Project / Folder / File / Entity nodes and typed semantic edges
-(CALLS, IMPORTS, INHERITS, etc.). Operates against a named database so
-each project lives in its own Neo4j database when running Enterprise.
-Falls back transparently to Community by using the default database and
-filtering on the `project` property.
+(CALLS, IMPORTS, INHERITS, etc.). Community-edition compatible — filters on
+the `project` property instead of requiring separate Neo4j databases.
 """
 
 from __future__ import annotations
@@ -15,11 +14,26 @@ from typing import Optional
 
 from neo4j import GraphDatabase
 
+from config import neo4j_config
 from models.code_types import CodeTriple, FileNode, FolderNode
 
 
+# Relationship types emitted by code_parser. Only these are allowed in MERGE
+# statements — validated before string interpolation to prevent injection.
+_ALLOWED_REL_TYPES = frozenset({
+    "CALLS", "IMPORTS", "INHERITS", "DEFINED_IN",
+    "HAS_CLASS", "POSTS_TO", "INCLUDES", "STYLES", "USED_BY",
+})
+
+
+def get_client(project: str) -> "CodeGraphClient":
+    """Return a CodeGraphClient connected to Neo4j for the given project."""
+    cfg = neo4j_config()
+    return CodeGraphClient(uri=cfg["uri"], user=cfg["user"], password=cfg["password"])
+
+
 class CodeGraphClient:
-    """Manages code-graph persistence for a single project database."""
+    """Manages code-graph persistence for a single project."""
 
     def __init__(
         self,
@@ -56,16 +70,18 @@ class CodeGraphClient:
              depth=folder.depth, project=project)
 
     def merge_file_node(self, node_id: str, file: FileNode, project: str) -> None:
-        """Upsert a File node."""
+        """Upsert a File node, stamping updated_at on every write."""
         self._run("""
             MERGE (f:File {id: $id})
             SET f.name = $name,
                 f.path = $path,
                 f.extension = $extension,
                 f.depth = $depth,
-                f.project = $project
+                f.project = $project,
+                f.updated_at = $now
         """, id=node_id, name=file.name, path=file.path,
-             extension=file.extension, depth=file.depth, project=project)
+             extension=file.extension, depth=file.depth, project=project,
+             now=_now())
 
     def merge_contains_edge(self, parent_id: str, child_id: str) -> None:
         """Upsert a CONTAINS edge between any two structural nodes."""
@@ -82,25 +98,27 @@ class CodeGraphClient:
     def write_code_triple(self, triple: CodeTriple, file_node_id: str, project: str) -> None:
         """Persist a CodeTriple as two Entity nodes plus a typed semantic edge.
 
-        Also writes a DEFINED_IN edge from the from_entity to its file node
-        so structural and semantic graphs stay connected.
+        Uses whitelist-validated string interpolation for the relationship type
+        because Cypher MERGE does not accept parameterised relationship labels.
         """
         from_id = _entity_id(triple.from_entity, project)
         to_id = _entity_id(triple.to_entity, project)
 
-        self._run("""
-            MERGE (a:Entity {id: $from_id})
+        rel_type = triple.relation_type if triple.relation_type in _ALLOWED_REL_TYPES else "RELATION"
+
+        self._run(f"""
+            MERGE (a:Entity {{id: $from_id}})
             SET a.name    = $from_name,
                 a.type    = $from_type,
                 a.project = $project,
                 a.file    = $source_file
 
-            MERGE (b:Entity {id: $to_id})
+            MERGE (b:Entity {{id: $to_id}})
             SET b.name    = $to_name,
                 b.type    = $to_type,
                 b.project = $project
 
-            MERGE (a)-[r:RELATION {type: $rel_type}]->(b)
+            MERGE (a)-[r:{rel_type}]->(b)
             ON CREATE SET r.source_file = $source_file,
                           r.line        = $line,
                           r.created_at  = $now
@@ -111,14 +129,12 @@ class CodeGraphClient:
             to_id=to_id,
             to_name=triple.to_entity,
             to_type=triple.to_type,
-            rel_type=triple.relation_type,
             source_file=triple.source_file,
             line=triple.line_number,
             project=project,
             now=_now(),
         )
 
-        # Connect entity to its file node in the hierarchy
         self._run("""
             MATCH (f:File {id: $file_id})
             MATCH (e:Entity {id: $entity_id})
@@ -133,20 +149,20 @@ class CodeGraphClient:
         """Return everything that calls entity_name (reverse CALLS traversal)."""
         entity_id = _entity_id(entity_name, project)
         return self._run_read("""
-            MATCH path = (caller:Entity)-[:RELATION* {type: 'CALLS'}]->(target:Entity {id: $id})
-            WHERE length(path) <= $hops
+            MATCH path = (caller:Entity)-[:CALLS*]->(target:Entity {id: $id})
+            WHERE caller.project = $project AND length(path) <= $hops
             RETURN caller.name AS caller_name,
                    caller.type AS caller_type,
                    caller.file AS caller_file,
                    length(path) AS depth
             ORDER BY depth
-        """, id=entity_id, hops=max_hops)
+        """, id=entity_id, project=project, hops=max_hops)
 
     def find_dependencies(self, file_path: str, project: str, max_hops: int = 3) -> list[dict]:
         """Return all modules imported (directly or transitively) by file_path."""
         return self._run_read("""
             MATCH (f:File {path: $path, project: $project})
-            MATCH path = (f)-[:CONTAINS]->(:Entity)-[:RELATION* {type: 'IMPORTS'}]->(dep:Entity)
+            MATCH path = (f)-[:CONTAINS]->(:Entity)-[:IMPORTS*]->(dep:Entity)
             WHERE length(path) <= $hops
             RETURN DISTINCT dep.name AS dependency,
                             dep.type AS dep_type,
@@ -157,7 +173,7 @@ class CodeGraphClient:
     def find_styles(self, element_name: str, project: str) -> list[dict]:
         """Return all CSS selectors that style element_name."""
         return self._run_read("""
-            MATCH (sel:Entity)-[r:RELATION {type: 'STYLES'}]->(el:Entity)
+            MATCH (sel:Entity)-[r:STYLES]->(el:Entity)
             WHERE el.name = $name AND el.project = $project
             RETURN sel.name    AS selector,
                    sel.file    AS source_file,
@@ -169,14 +185,14 @@ class CodeGraphClient:
         """Trace the call chain forward from start_name up to max_hops deep."""
         start_id = _entity_id(start_name, project)
         return self._run_read("""
-            MATCH path = (start:Entity {id: $id})-[:RELATION* {type: 'CALLS'}]->(callee:Entity)
-            WHERE length(path) <= $hops
+            MATCH path = (start:Entity {id: $id})-[:CALLS*]->(callee:Entity)
+            WHERE callee.project = $project AND length(path) <= $hops
             RETURN callee.name AS callee_name,
                    callee.type AS callee_type,
                    callee.file AS callee_file,
                    length(path) AS depth
             ORDER BY depth, callee.name
-        """, id=start_id, hops=max_hops)
+        """, id=start_id, project=project, hops=max_hops)
 
     def get_project_tree(self, project: str) -> list[dict]:
         """Return the full containment hierarchy for a project."""
@@ -189,40 +205,56 @@ class CodeGraphClient:
             ORDER BY child.depth, child.path
         """, project=project)
 
+    def get_file_updated_at(self, file_path: str, project: str) -> Optional[str]:
+        """Return the updated_at timestamp for a File node, or None if not found."""
+        rows = self._run_read("""
+            MATCH (f:File {path: $path, project: $project})
+            RETURN f.updated_at AS updated_at
+        """, path=file_path, project=project)
+        return rows[0]["updated_at"] if rows else None
+
+    def get_project_last_ingested(self, project: str) -> Optional[str]:
+        """Return the last_ingested timestamp for a Project node, or None if not found."""
+        rows = self._run_read("""
+            MATCH (p:Project {name: $project})
+            RETURN p.last_ingested AS last_ingested
+        """, project=project)
+        return rows[0]["last_ingested"] if rows else None
+
     # ------------------------------------------------------------------
-    # Master graph — cross-project bridge edges
+    # Cleanup
     # ------------------------------------------------------------------
 
-    def write_bridge_edge(
-        self,
-        from_entity_id: str,
-        to_entity_id: str,
-        bridge_type: str,
-        confidence: float,
-        via: str,
-    ) -> None:
-        """Persist a cross-project BRIDGE edge."""
+    def delete_file_triples(self, file_path: str, project: str) -> None:
+        """Remove all Entity nodes sourced from file_path (before re-ingesting a modified file).
+
+        Leaves the File node intact so the hierarchy skeleton remains valid.
+        """
         self._run("""
-            MATCH (a:Entity {id: $from_id})
-            MATCH (b:Entity {id: $to_id})
-            MERGE (a)-[br:BRIDGE]->(b)
-            ON CREATE SET br.type        = $bridge_type,
-                          br.confidence  = $confidence,
-                          br.via         = $via,
-                          br.detected_at = $now
-            ON MATCH  SET br.confidence  = $confidence,
-                          br.via         = $via
-        """,
-            from_id=from_entity_id,
-            to_id=to_entity_id,
-            bridge_type=bridge_type,
-            confidence=confidence,
-            via=via,
-            now=_now(),
-        )
+            MATCH (e:Entity {project: $project, file: $path})
+            DETACH DELETE e
+        """, project=project, path=file_path)
+
+    def delete_file(self, file_path: str, project: str) -> None:
+        """Remove both the File node and all Entity nodes sourced from file_path.
+
+        Use for deleted or moved files — removes ghost nodes from the index.
+        """
+        self._run("""
+            MATCH (e:Entity {project: $project, file: $path})
+            DETACH DELETE e
+        """, project=project, path=file_path)
+        self._run("""
+            MATCH (f:File {path: $path, project: $project})
+            DETACH DELETE f
+        """, project=project, path=file_path)
+
+    # ------------------------------------------------------------------
+    # Utility
+    # ------------------------------------------------------------------
 
     def get_all_entity_names(self, project: str) -> list[dict]:
-        """Return name + id for every entity in a project — used by bridge_detector."""
+        """Return name + id for every entity in a project."""
         return self._run_read("""
             MATCH (e:Entity {project: $project})
             RETURN e.id AS id, e.name AS name, e.type AS entity_type
@@ -238,15 +270,10 @@ class CodeGraphClient:
         """, name=name, project=project)
         return rows[0] if rows else None
 
-    def delete_file_triples(self, file_path: str, project: str) -> None:
-        """Remove all Entity nodes and RELATION edges sourced from file_path.
-
-        Used by file_watcher before re-ingesting a changed file.
-        """
-        self._run("""
-            MATCH (e:Entity {project: $project, file: $path})
-            DETACH DELETE e
-        """, project=project, path=file_path)
+    def get_all_projects(self) -> list[str]:
+        """Return the names of all ingested projects, ordered alphabetically."""
+        rows = self._run_read("MATCH (p:Project) RETURN p.name AS name ORDER BY p.name")
+        return [r["name"] for r in rows]
 
     def get_file_nodes(self, project: str) -> list[dict]:
         """Return {id, path} for every File node in a project — used by load-triples."""
@@ -273,7 +300,6 @@ class CodeGraphClient:
                 session.run(query, params)
         except Exception as exc:
             if "DatabaseNotFound" in str(exc) and self._database is not None:
-                # Community edition — silently fall back to the default database
                 self._database = None
                 with self._driver.session() as session:
                     session.run(query, params)
