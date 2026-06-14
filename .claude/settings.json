@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag)/scripts/session_start.py\"",
+            "command": "python \"$(git -C \"$(dirname \"$0\")\" rev-parse --show-toplevel 2>/dev/null || pwd)/scripts/session_start.py\"",
             "timeout": 10,
             "statusMessage": "Loading project memory..."
           }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$(git rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag)/scripts/auto_memory.py\"",
+            "command": "python \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/scripts/auto_memory.py\"",
             "timeout": 120,
             "statusMessage": "Saving session learnings...",
             "async": true
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$(git rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag)/scripts/on_compact.py\"",
+            "command": "python \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/scripts/on_compact.py\"",
             "timeout": 15,
             "statusMessage": "Saving learnings before compaction..."
           }
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "REPO=$(git rev-parse --show-toplevel 2>/dev/null || echo /Users/manojkumarmuthukumaran/Documents/Work/graphrag) && python \"$REPO/scripts/on_file_change.py\" --project graphrag --root \"$REPO\""
+            "command": "REPO=$(git rev-parse --show-toplevel 2>/dev/null || pwd) && python \"$REPO/scripts/on_file_change.py\" --project graphrag --root \"$REPO\""
           }
         ]
       }
