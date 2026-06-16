@@ -98,12 +98,32 @@ cd /path/to/graphrag
 python graph/query_cli.py "your question here"
 ```
 
-For code structure questions:
+For code structure questions (query before reading raw files):
 ```bash
-python -m graph.code_query_cli --deps path/to/file.py --project <project> --plain
+# Before editing a file or symbol
+python -m graph.code_query_cli --blast-radius path/to/file.py --project <project> --plain
+python -m graph.code_query_cli --blast-radius "SymbolName" --project <project> --plain
+
+# Before a multi-file PR
+python -m graph.code_query_cli --batch-impact file1.py file2.py --project <project> --plain
+
+# Reverse impact (what calls this?)
 python -m graph.code_query_cli --impact "FunctionName" --project <project> --plain
+
+# Other traversals
+python -m graph.code_query_cli --deps path/to/file.py --project <project> --plain
 python -m graph.code_query_cli --tree <project> --plain
+python -m graph.code_query_cli --styles ElementName --project <project> --plain
 ```
+
+When to use which flag:
+- About to edit one file or symbol → --blast-radius first
+- Planning a PR touching N files → --batch-impact file1 file2 ...
+- Renaming or removing a function → --impact FunctionName
+- Understanding imports → --deps path/to/file
+- Tracing a call chain → --trace EntryPoint
+- Orienting in an unfamiliar project → --tree <project>
+- Editing a CSS variable or component → --styles ElementName
 
 Full instructions: /path/to/graphrag/CLAUDE.md
 EOF
@@ -207,6 +227,16 @@ Stop hook fires → auto_memory.py → timestamp + files logged to memory/sessio
 python -m graph.code_query_cli --trace "run_agentic_agent" --project graphrag --plain
 ```
 
+**"I'm about to edit `ingestion/code_parser.py` — what else will be affected?"**
+```bash
+python -m graph.code_query_cli --blast-radius ingestion/code_parser.py --project graphrag --plain
+```
+
+**"I'm planning a PR that touches these 3 files — what's the full blast radius?"**
+```bash
+python -m graph.code_query_cli --batch-impact ingestion/code_parser.py graph/code_graph_client.py graph/code_query_cli.py --project graphrag --plain
+```
+
 **"What concepts are in the graph?"**
 ```bash
 python graph/query_cli.py --list-nodes
@@ -248,4 +278,4 @@ Make sure the Stop hook is wired in `.claude/settings.json` and that `scripts/au
 Learnings are not automatic — they are saved when you say **"store my session"** during a session. The Stop hook only writes metadata to `session_log.md`.
 
 **Code graph is stale after editing files**
-The `on_file_change.py` hook only handles Python files (and other supported extensions). Check `ingestion/code_parser.py` → `SUPPORTED_EXTENSIONS` to see what's covered.
+The `on_file_change.py` hook re-ingests on every Write/Edit. Supported extensions: `.py`, `.js`, `.ts`, `.tsx` (emit `CALLS`/`IMPORTS`/`INHERITS`), `.css`, `.scss` (emit `DEFINED_IN`/`USES_VAR`/`IMPORTS`), `.html` (emit `REFERENCES`/`INCLUDES`). Files ending in `.styles.ts` (Lit web components) additionally run a secondary CSS extraction pass on `` css`...` `` template literals, emitting `USES_VAR` and `DEFINED_IN` triples for design tokens — so `--impact "--tm-button-block-size"` returns Lit component files. Check `ingestion/code_parser.py` → `SUPPORTED_EXTENSIONS` for the full list.

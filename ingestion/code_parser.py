@@ -9,6 +9,7 @@ Supports: .py, .js, .ts, .tsx, .html, .css, .scss
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -32,6 +33,8 @@ POSTS_TO = "POSTS_TO"
 INCLUDES = "INCLUDES"
 STYLES = "STYLES"
 USED_BY = "USED_BY"
+USES_VAR = "USES_VAR"
+REFERENCES = "REFERENCES"
 
 # Entity types
 TYPE_FUNCTION = "function"
@@ -44,6 +47,15 @@ TYPE_SCSS_VARIABLE = "scss_variable"
 TYPE_ENDPOINT = "endpoint"
 TYPE_CSS_CLASS = "css_class"
 TYPE_FILE = "file"
+
+# Regex patterns for CSS/SCSS source scanning
+_CSS_VAR_RE = re.compile(r'var\(\s*(--[\w-]+)')
+_SCSS_IMPORT_RE = re.compile(r'@(?:import|use|forward)\s+["\']([^"\']+)["\']', re.MULTILINE)
+
+# Regex patterns for Lit css`...` tagged template literals in .styles.ts files
+_LIT_CSS_TEMPLATE_RE = re.compile(r'css`(.*?)`', re.DOTALL)
+_TEMPLATE_EXPR_RE = re.compile(r'\$\{[^}]*\}')          # strips ${...} interpolations
+_CSS_CUSTOM_PROP_RE = re.compile(r'(--[\w-]+)\s*:')      # CSS custom property declarations
 
 # Built-in names that add no signal as CALLS targets
 _NOISE_CALLEES = {
@@ -356,8 +368,27 @@ def _extract_js_callee(call_node: Node) -> str | None:
 def _extract_html(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
     component_name = Path(file_path).stem
     triples: list[CodeTriple] = []
+    seen_tags: set[str] = set()
 
     for node in _walk(root):
+        # Index custom element tag references (<a-button>, <tm-icon>, etc.)
+        # Custom elements always contain a hyphen per the HTML spec.
+        if node.type == "start_tag":
+            tag_node = _child_of_type(node, "tag_name")
+            if tag_node:
+                tag_name = _text(tag_node)
+                if "-" in tag_name and tag_name not in seen_tags:
+                    seen_tags.add(tag_name)
+                    triples.append(CodeTriple(
+                        from_entity=component_name,
+                        from_type=TYPE_HTML_ELEMENT,
+                        relation_type=REFERENCES,
+                        to_entity=tag_name,
+                        to_type=TYPE_HTML_ELEMENT,
+                        source_file=file_path,
+                        line_number=_line(tag_node),
+                    ))
+
         if node.type != "attribute":
             continue
 
@@ -415,6 +446,7 @@ def _extract_html(root: Node, source: bytes, file_path: str) -> list[CodeTriple]
 def _extract_css(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
     file_name = Path(file_path).name
     is_scss = file_path.endswith(".scss")
+    module_name = _module_name_from_path(file_path)
     triples: list[CodeTriple] = []
 
     for node in _walk(root):
@@ -453,6 +485,106 @@ def _extract_css(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
                         source_file=file_path,
                         line_number=_line(prop_node),
                     ))
+
+    # Scan source text for var(--foo) usages — emit one USES_VAR triple per unique variable.
+    source_text = source.decode("utf-8", errors="replace")
+    seen_vars: set[str] = set()
+    for match in _CSS_VAR_RE.finditer(source_text):
+        var_name = match.group(1)
+        if var_name in seen_vars:
+            continue
+        seen_vars.add(var_name)
+        line = source_text[: match.start()].count("\n") + 1
+        triples.append(CodeTriple(
+            from_entity=module_name,
+            from_type=TYPE_MODULE,
+            relation_type=USES_VAR,
+            to_entity=var_name,
+            to_type=TYPE_SCSS_VARIABLE,
+            source_file=file_path,
+            line_number=line,
+        ))
+
+    # For SCSS files, index @import / @use / @forward as IMPORTS edges so --deps works.
+    if is_scss:
+        for match in _SCSS_IMPORT_RE.finditer(source_text):
+            imported = match.group(1)
+            line = source_text[: match.start()].count("\n") + 1
+            triples.append(CodeTriple(
+                from_entity=module_name,
+                from_type=TYPE_MODULE,
+                relation_type=IMPORTS,
+                to_entity=imported,
+                to_type=TYPE_MODULE,
+                source_file=file_path,
+                line_number=line,
+            ))
+
+    return triples
+
+
+# ---------------------------------------------------------------------------
+# Lit CSS template literal extraction (.styles.ts)
+# ---------------------------------------------------------------------------
+
+def _extract_lit_css_tokens(source_text: str, file_path: str) -> list[CodeTriple]:
+    """Extract USES_VAR and DEFINED_IN triples from Lit css`...` template literals.
+
+    Finds every css`...` block in the source, strips ${...} interpolations so
+    dynamic expressions don't cause false positives or crashes, then scans the
+    remaining CSS text with the same regexes used for plain CSS/SCSS files.
+
+    Called as a secondary pass on top of the normal TS extraction — existing
+    CALLS/IMPORTS/INHERITS triples are unaffected.
+    """
+    module_name = _module_name_from_path(file_path)
+    file_name = Path(file_path).name
+    triples: list[CodeTriple] = []
+    seen_uses: set[str] = set()
+    seen_defs: set[str] = set()
+
+    for block_match in _LIT_CSS_TEMPLATE_RE.finditer(source_text):
+        block_content = block_match.group(1)
+        block_start = block_match.start(1)
+
+        # Strip ${...} interpolations — leave surrounding CSS text intact.
+        css_text = _TEMPLATE_EXPR_RE.sub("", block_content)
+
+        # var(--foo) usages → USES_VAR (one triple per unique variable per file)
+        for m in _CSS_VAR_RE.finditer(css_text):
+            var_name = m.group(1)
+            if var_name in seen_uses:
+                continue
+            seen_uses.add(var_name)
+            abs_pos = block_start + m.start()
+            line = source_text[:abs_pos].count("\n") + 1
+            triples.append(CodeTriple(
+                from_entity=module_name,
+                from_type=TYPE_MODULE,
+                relation_type=USES_VAR,
+                to_entity=var_name,
+                to_type=TYPE_SCSS_VARIABLE,
+                source_file=file_path,
+                line_number=line,
+            ))
+
+        # --foo: value declarations → DEFINED_IN (one triple per unique prop per file)
+        for m in _CSS_CUSTOM_PROP_RE.finditer(css_text):
+            prop_name = m.group(1)
+            if prop_name in seen_defs:
+                continue
+            seen_defs.add(prop_name)
+            abs_pos = block_start + m.start()
+            line = source_text[:abs_pos].count("\n") + 1
+            triples.append(CodeTriple(
+                from_entity=prop_name,
+                from_type=TYPE_SCSS_VARIABLE,
+                relation_type=DEFINED_IN,
+                to_entity=file_name,
+                to_type=TYPE_FILE,
+                source_file=file_path,
+                line_number=line,
+            ))
 
     return triples
 
@@ -496,7 +628,17 @@ def parse_file(file_path: str, project_root: str) -> list[CodeTriple]:
         source = Path(file_path).read_bytes()
         tree = parser.parse(source)
         relative_path = os.path.relpath(file_path, project_root)
-        return extractor(tree.root_node, source, relative_path)
+        triples = extractor(tree.root_node, source, relative_path)
+
+        # Secondary pass: extract CSS tokens from Lit css`...` template literals.
+        # Applies to any .styles.ts file — these are invisible to the TS extractor
+        # because css`...` content is opaque to tree-sitter's TypeScript grammar.
+        if relative_path.endswith(".styles.ts"):
+            triples += _extract_lit_css_tokens(
+                source.decode("utf-8", errors="replace"), relative_path
+            )
+
+        return triples
     except Exception as exc:
         print(f"[code_parser] skipping {file_path}: {exc}")
         return []

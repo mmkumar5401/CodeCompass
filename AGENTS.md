@@ -25,10 +25,17 @@ python main.py ingest-code /path/to/repo --project <name>
 ## 2. Query
 
 ```bash
-# What should I read before editing this file?
+# Before editing a file or symbol — see everything it touches (forward traversal)
+python -m graph.code_query_cli --blast-radius src/auth/login.py --project <name>
+python -m graph.code_query_cli --blast-radius "write_code_triple" --project <name>
+
+# Before a multi-file change or PR — union blast radius across all targets
+python -m graph.code_query_cli --batch-impact src/auth/login.py src/auth/session.py --project <name>
+
+# What does this file import (direct + transitive)?
 python -m graph.code_query_cli --deps src/auth/login.py --project <name>
 
-# What breaks if I change this function?
+# What breaks if I change this function? (reverse traversal)
 python -m graph.code_query_cli --impact "write_code_triple" --project <name>
 
 # Print the full folder/file hierarchy
@@ -44,6 +51,29 @@ python -m graph.code_query_cli --styles "LoginForm" --project <name>
 Output is plain text by default. Add `--rich` for formatted tables (human use only).
 
 > Always invoke as `python -m graph.code_query_cli` (not `python graph/code_query_cli.py`) to avoid module import errors.
+
+### When to use which flag
+
+| Scenario | Flag |
+|---|---|
+| About to edit one file or symbol | `--blast-radius` first |
+| Planning a PR touching N files | `--batch-impact file1 file2 ...` |
+| Renaming or removing a function | `--impact FunctionName` |
+| Understanding what a file imports | `--deps path/to/file` |
+| Tracing a call chain forward | `--trace EntryPoint` |
+| Orienting in an unfamiliar project | `--tree <project>` |
+| Editing a CSS variable or component | `--styles ElementName` |
+
+### Ingested file types
+
+| Language | Edges emitted |
+|---|---|
+| Python, JS, TS, TSX | `CALLS`, `IMPORTS`, `INHERITS` |
+| CSS, SCSS | `DEFINED_IN` (variable declarations), `USES_VAR` (usages), `IMPORTS` (@import/@use) |
+| HTML | `REFERENCES` (custom element tags with hyphen), `INCLUDES` (script/link tags) |
+| `.styles.ts` (Lit) | `USES_VAR` (var() in css`...` blocks), `DEFINED_IN` (--prop declarations) + all normal TS edges |
+
+> **Lit design tokens:** use `--impact "--tm-button-block-size" --project <name>` to find every `.styles.ts` that consumes a token. The secondary CSS extraction pass runs automatically — no extra flags needed.
 
 ---
 

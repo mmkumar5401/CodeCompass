@@ -23,6 +23,7 @@ from models.code_types import CodeTriple, FileNode, FolderNode
 _ALLOWED_REL_TYPES = frozenset({
     "CALLS", "IMPORTS", "INHERITS", "DEFINED_IN",
     "HAS_CLASS", "POSTS_TO", "INCLUDES", "STYLES", "USED_BY",
+    "USES_VAR", "REFERENCES",
 })
 
 
@@ -141,15 +142,97 @@ class CodeGraphClient:
             MERGE (f)-[:CONTAINS]->(e)
         """, file_id=file_node_id, entity_id=from_id)
 
+    def write_code_triples_batch(
+        self,
+        triples: list[CodeTriple],
+        file_id_map: dict[str, str],
+        project: str,
+        batch_size: int = 500,
+    ) -> int:
+        """Write a list of CodeTriples to Neo4j using UNWIND batching.
+
+        Groups triples by relation type (so the type can be a Cypher literal)
+        then writes each group in chunks of batch_size. Typically 10-50x faster
+        than calling write_code_triple in a loop.
+
+        Returns the number of triples written.
+        """
+        from collections import defaultdict
+
+        now = _now()
+        by_rel: dict[str, list[dict]] = defaultdict(list)
+
+        for triple in triples:
+            rel_type = triple.relation_type if triple.relation_type in _ALLOWED_REL_TYPES else "RELATION"
+            by_rel[rel_type].append({
+                "from_id":      _entity_id(triple.from_entity, project),
+                "from_name":    triple.from_entity,
+                "from_type":    triple.from_type,
+                "to_id":        _entity_id(triple.to_entity, project),
+                "to_name":      triple.to_entity,
+                "to_type":      triple.to_type,
+                "source_file":  triple.source_file,
+                "line":         triple.line_number,
+                "file_node_id": file_id_map.get(triple.source_file, ""),
+                "project":      project,
+                "now":          now,
+            })
+
+        total_batches = sum(-(-len(v) // batch_size) for v in by_rel.values())
+
+        try:
+            from tqdm import tqdm
+            batch_iter = tqdm(total=total_batches, desc="Writing triples", unit="batch")
+        except ImportError:
+            batch_iter = None
+
+        written = 0
+        for rel_type, records in by_rel.items():
+            for i in range(0, len(records), batch_size):
+                chunk = records[i : i + batch_size]
+                self._run(f"""
+                    UNWIND $records AS t
+                    MERGE (a:Entity {{id: t.from_id}})
+                    SET a.name    = t.from_name,
+                        a.type    = t.from_type,
+                        a.project = t.project,
+                        a.file    = t.source_file
+                    MERGE (b:Entity {{id: t.to_id}})
+                    SET b.name    = t.to_name,
+                        b.type    = t.to_type,
+                        b.project = t.project
+                    MERGE (a)-[r:{rel_type}]->(b)
+                    ON CREATE SET r.source_file = t.source_file,
+                                  r.line        = t.line,
+                                  r.created_at  = t.now
+                    WITH a, t
+                    WHERE t.file_node_id <> ""
+                    MATCH (f:File {{id: t.file_node_id}})
+                    MERGE (f)-[:CONTAINS]->(a)
+                """, records=chunk)
+                written += len(chunk)
+                if batch_iter is not None:
+                    batch_iter.update(1)
+
+        if batch_iter is not None:
+            batch_iter.close()
+
+        return written
+
     # ------------------------------------------------------------------
     # Traversal queries used by code_query_cli
     # ------------------------------------------------------------------
 
     def find_callers(self, entity_name: str, project: str, max_hops: int = 3) -> list[dict]:
-        """Return everything that calls entity_name (reverse CALLS traversal)."""
+        """Return everything that calls/uses/references entity_name (reverse traversal).
+
+        Traverses CALLS (code), USES_VAR (CSS variable consumers), and REFERENCES
+        (HTML component tag usages) so --impact works for functions, CSS variables,
+        and web component tags alike.
+        """
         entity_id = _entity_id(entity_name, project)
         return self._run_read("""
-            MATCH path = (caller:Entity)-[:CALLS*]->(target:Entity {id: $id})
+            MATCH path = (caller:Entity)-[:CALLS|USES_VAR|REFERENCES*]->(target:Entity {id: $id})
             WHERE caller.project = $project AND length(path) <= $hops
             RETURN caller.name AS caller_name,
                    caller.type AS caller_type,
@@ -252,6 +335,53 @@ class CodeGraphClient:
     # ------------------------------------------------------------------
     # Utility
     # ------------------------------------------------------------------
+
+    def get_blast_radius(
+        self, target: str, project: str, max_hops: int = 3
+    ) -> tuple[list[dict], str | None]:
+        """Return all files reachable from target via CALLS/IMPORTS/INHERITS (forward).
+
+        Tries target as a symbol name first, then as a file path.
+        Returns (rows, target_file) where target_file is the file containing the
+        target (or the path itself for file targets). Returns ([], None) when not found.
+        Each row: {file, edge_type, hops}.
+        """
+        entity_id = _entity_id(target, project)
+        entity_rows = self._run_read(
+            "MATCH (e:Entity {id: $id, project: $project}) RETURN e.file AS file LIMIT 1",
+            id=entity_id, project=project,
+        )
+        if entity_rows:
+            target_file = entity_rows[0].get("file")
+            rows = self._run_read("""
+                MATCH path = (start:Entity {id: $id})-[:CALLS|IMPORTS|INHERITS*]->(dep:Entity)
+                WHERE dep.project = $project AND length(path) <= $hops AND dep.file IS NOT NULL
+                RETURN dep.file AS file,
+                       type(relationships(path)[0]) AS edge_type,
+                       length(path) AS hops
+                ORDER BY hops, dep.file
+            """, id=entity_id, project=project, hops=max_hops)
+            return rows, target_file
+
+        file_rows = self._run_read(
+            "MATCH (f:File {path: $path, project: $project}) RETURN f.path AS file LIMIT 1",
+            path=target, project=project,
+        )
+        if file_rows:
+            target_file = file_rows[0].get("file")
+            rows = self._run_read("""
+                MATCH (f:File {path: $path, project: $project})-[:CONTAINS]->(e:Entity)
+                MATCH path = (e)-[:CALLS|IMPORTS|INHERITS*]->(dep:Entity)
+                WHERE dep.project = $project AND length(path) <= $hops
+                  AND dep.file IS NOT NULL AND dep.file <> $path
+                RETURN dep.file AS file,
+                       type(relationships(path)[0]) AS edge_type,
+                       length(path) AS hops
+                ORDER BY hops, dep.file
+            """, path=target, project=project, hops=max_hops)
+            return rows, target_file
+
+        return [], None
 
     def get_all_entity_names(self, project: str) -> list[dict]:
         """Return name + id for every entity in a project."""

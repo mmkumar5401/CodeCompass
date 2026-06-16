@@ -6,9 +6,26 @@ It's a Neo4j-backed code dependency index. Ingest a repo once, then ask Claude C
 
 ---
 
+## What's new in v1.1
+
+| Feature | Flag | Description |
+|---|---|---|
+| Blast radius preview | `--blast-radius` | All files reachable from a symbol or file before you start editing |
+| Batch impact analysis | `--batch-impact` | Union blast radius across multiple targets — plan a whole PR at once |
+| Lit CSS token extraction | _(automatic)_ | `var()` usages and `--prop` declarations inside `` css`...` `` in `.styles.ts` files now indexed |
+
+---
+
 ## What it does
 
 ```bash
+# Before editing anything — see every file the change will touch
+python -m graph.code_query_cli --blast-radius ingestion/file_watcher.py --project graphrag
+python -m graph.code_query_cli --blast-radius "write_code_triple" --project graphrag
+
+# Planning a PR that touches multiple files — union of all blast radii
+python -m graph.code_query_cli --batch-impact ingestion/file_watcher.py graph/code_graph_client.py --project graphrag
+
 # What does this file import (direct + transitive)?
 python -m graph.code_query_cli --deps ingestion/file_watcher.py --project graphrag
 
@@ -28,6 +45,18 @@ python -m graph.code_query_cli --list-projects
 Output is plain text by default (agent-friendly). Add `--rich` for formatted tables.
 
 Each result includes `# index updated: <timestamp>`. If the index is older than 24 hours a `WARNING` is printed automatically.
+
+### When to use which flag
+
+| Scenario | Flag |
+|---|---|
+| About to edit one file or symbol | `--blast-radius` first |
+| Planning a PR touching N files | `--batch-impact file1 file2 ...` |
+| Renaming or removing a function | `--impact FunctionName` |
+| Understanding what a file imports | `--deps path/to/file` |
+| Tracing a call chain forward | `--trace EntryPoint` |
+| Orienting in an unfamiliar project | `--tree <project>` |
+| Finding which CSS components use a design token | `--impact "--tm-token-name"` |
 
 ---
 
@@ -120,14 +149,24 @@ hierarchy_builder.py    — walks repo, writes Project → Folder → File skele
     │
     ▼
 code_parser.py          — tree-sitter extraction (no API calls)
-    │                     Python, JS, TS, TSX, HTML, CSS, SCSS
+    │                     Python, JS, TS, TSX → CALLS, IMPORTS, INHERITS
+    │                     CSS, SCSS → DEFINED_IN, USES_VAR, IMPORTS
+    │                     HTML → REFERENCES, INCLUDES
+    │                     .styles.ts (Lit) → secondary CSS pass on css`...` blocks
+    │                                        → USES_VAR + DEFINED_IN for design tokens
     ▼
 Neo4j                   — typed relationships: [:CALLS], [:IMPORTS],
-                          [:INHERITS], [:STYLES], [:DEFINED_IN], …
+                          [:INHERITS], [:STYLES], [:DEFINED_IN], [:USES_VAR], …
     │
     ▼
-code_query_cli.py       — traversal queries: --deps, --impact, --trace,
-                          --styles, --tree, --list-projects
+code_query_cli.py       — traversal queries:
+                          --blast-radius  all files reachable from a target
+                          --batch-impact  union blast radius for N targets
+                          --deps          what a file imports
+                          --impact        what calls/uses a symbol
+                          --trace         forward call chain
+                          --styles        CSS selectors for an element
+                          --tree          folder/file hierarchy
 ```
 
 Typed relationships (not generic `RELATION {type: ...}`) mean variable-length path queries are index-scannable on Neo4j Community Edition.
@@ -140,9 +179,11 @@ Typed relationships (not generic `RELATION {type: ...}`) mean variable-length pa
 graphrag/
 ├── graph/
 │   ├── code_graph_client.py    Neo4j I/O — nodes, edges, traversal queries
-│   └── code_query_cli.py       CLI — deps / impact / trace / styles / tree
+│   │                           + get_blast_radius() for forward traversal
+│   └── code_query_cli.py       CLI — blast-radius / batch-impact / deps /
+│                                      impact / trace / styles / tree
 ├── ingestion/
-│   ├── code_parser.py          tree-sitter extraction
+│   ├── code_parser.py          tree-sitter extraction + Lit css`...` pass
 │   ├── hierarchy_builder.py    Project → Folder → File skeleton
 │   ├── file_watcher.py         incremental updates on file change
 │   └── code_normalizer.py      optional Haiku normalization pass
@@ -176,7 +217,8 @@ This means Claude Code automatically picks up the right `--project` name and que
 ## Limitations
 
 - Structure only — the graph knows what calls what, not what anything *means*
-- Supported languages: Python, JS, TS, TSX, HTML, CSS, SCSS
+- Supported languages: Python, JS, TS, TSX, HTML, CSS, SCSS, `.styles.ts` (Lit)
 - External callers (consumers outside the ingested repo) won't appear in `--impact`
+- Lit CSS extraction covers explicit `var(--foo)` usages and `:host { --foo: ... }` declarations; generated property names from `theme.props()` patterns are not yet indexed
 - If Neo4j is down, the CLI prints startup instructions instead of a traceback
 - If the watcher isn't running and files were edited, the CLI warns automatically with the command to start it

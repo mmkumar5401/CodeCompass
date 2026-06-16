@@ -43,6 +43,10 @@ def main() -> None:
 
     if args.list_projects:
         run_list_projects(rich=rich)
+    elif args.batch_impact:
+        run_batch_impact(args.batch_impact, args.project, max_hops=args.hops, rich=rich)
+    elif args.blast_radius:
+        run_blast_radius(args.blast_radius, args.project, max_hops=args.hops, rich=rich)
     elif args.impact:
         run_impact(args.impact, args.project, max_hops=args.hops, rich=rich)
     elif args.deps:
@@ -205,6 +209,123 @@ def run_trace(start_name: str, project: str, max_hops: int = DEFAULT_HOPS, rich:
             print(f"  {row.get('callee_name','')} ({row.get('callee_type','')}) in {row.get('callee_file','')} [depth {row.get('depth','')}]")
 
 
+def run_blast_radius(target: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
+    """Show every file reachable from target via CALLS/IMPORTS/INHERITS (forward traversal)."""
+    client = get_client(project)
+    try:
+        rows, target_file = client.get_blast_radius(target, project, max_hops)
+        updated_at = client.get_file_updated_at(target_file, project) if target_file else None
+    finally:
+        client.close()
+
+    if target_file is None:
+        print(f"ERROR: '{target}' not found in project '{project}'")
+        sys.exit(1)
+
+    # Deduplicate by file, keeping the minimum-hop row for each.
+    seen: dict[str, dict] = {}
+    for row in rows:
+        f = row["file"]
+        if f not in seen or row["hops"] < seen[f]["hops"]:
+            seen[f] = row
+
+    # Prepend the target file itself at hop 0.
+    if target_file not in seen:
+        seen[target_file] = {"file": target_file, "edge_type": "self", "hops": 0}
+
+    deduped = sorted(seen.values(), key=lambda r: (r["hops"], r["file"]))
+    max_hop_seen = max(r["hops"] for r in deduped)
+    summary = f"# blast radius: {len(deduped)} files across {max_hop_seen} hops"
+
+    stamp = _staleness_line(updated_at, rich_mode=rich)
+    if rich:
+        if stamp:
+            console.print(stamp)
+        table = _make_table(
+            title=f"Blast radius of '{target}'",
+            columns=["File", "Relationship", "Hops"],
+        )
+        for row in deduped:
+            table.add_row(row["file"], row.get("edge_type", ""), str(row["hops"]))
+        console.print(table)
+        console.print(f"[dim]{summary}[/]")
+    else:
+        if stamp:
+            print(stamp)
+        for row in deduped:
+            print(row["file"])
+        print(summary)
+
+
+def run_batch_impact(targets: list[str], project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
+    """Union of blast radii across multiple targets, annotated with which target caused each file."""
+    input_set = set(targets)
+    client = get_client(project)
+    try:
+        # merged: file -> {hops, via: set[str]}
+        merged: dict[str, dict] = {}
+        missing: list[str] = []
+        resolved: list[str] = []
+        staleness_ts: str | None = None
+
+        for target in targets:
+            rows, target_file = client.get_blast_radius(target, project, max_hops)
+            if target_file is None:
+                print(f"WARNING: '{target}' not found in project '{project}'")
+                missing.append(target)
+                continue
+            resolved.append(target)
+            if staleness_ts is None:
+                staleness_ts = client.get_file_updated_at(target_file, project)
+
+            # Include the target file itself at hop 0
+            all_rows = list(rows)
+            if not any(r["file"] == target_file for r in all_rows):
+                all_rows.append({"file": target_file, "edge_type": "self", "hops": 0})
+
+            for row in all_rows:
+                f = row["file"]
+                h = row["hops"]
+                if f not in merged:
+                    merged[f] = {"hops": h, "via": {target}}
+                else:
+                    if h < merged[f]["hops"]:
+                        merged[f]["hops"] = h
+                    merged[f]["via"].add(target)
+    finally:
+        client.close()
+
+    if not resolved:
+        sys.exit(1)
+
+    deduped = sorted(merged.items(), key=lambda kv: (kv[1]["hops"], kv[0]))
+    max_hop_seen = max(v["hops"] for _, v in deduped) if deduped else 0
+    summary = f"# batch impact: {len(deduped)} files, {len(targets)} input targets, {max_hop_seen} hops"
+
+    stamp = _staleness_line(staleness_ts, rich_mode=rich)
+    if rich:
+        if stamp:
+            console.print(stamp)
+        table = _make_table(
+            title=f"Batch impact ({len(targets)} targets)",
+            columns=["File", "Via", "Hops"],
+        )
+        for f, meta in deduped:
+            via_str = ", ".join(sorted(meta["via"]))
+            flags = " [also in input]" if f in input_set else ""
+            table.add_row(f"{f}{flags}", via_str, str(meta["hops"]))
+        console.print(table)
+        console.print(f"[dim]{summary}[/]")
+    else:
+        if stamp:
+            print(stamp)
+        for f, meta in deduped:
+            via_str = ", ".join(sorted(meta["via"]))
+            flags = "  [also in input]" if f in input_set else ""
+            print(f"{f}  [via: {via_str}]{flags}")
+        print(summary)
+
+
 def run_tree(project: str, rich: bool = False) -> None:
     """Print the full project hierarchy as a tree."""
     client = get_client(project)
@@ -353,6 +474,10 @@ def _parse_args() -> argparse.Namespace:
                         help="Project name to query (default: 'default')")
     parser.add_argument("--hops", type=int, default=DEFAULT_HOPS,
                         help=f"Max traversal depth (default: {DEFAULT_HOPS})")
+    parser.add_argument("--batch-impact", metavar="TARGET", nargs="+",
+                        help="Union of blast radii across multiple targets (file paths or symbol names)")
+    parser.add_argument("--blast-radius", metavar="TARGET",
+                        help="All files reachable from TARGET via CALLS/IMPORTS/INHERITS (symbol or file path)")
     parser.add_argument("--impact", metavar="ENTITY",
                         help="What calls ENTITY? (reverse CALLS traversal)")
     parser.add_argument("--deps", metavar="FILE",
