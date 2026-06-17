@@ -1,5 +1,8 @@
 # CodeCompass — Code Intelligence Engine for AI Coding Agents
 
+[![PyPI version](https://img.shields.io/pypi/v/codecompass-mcp)](https://pypi.org/project/codecompass-mcp/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+
 Full-indexes an average repository in seconds, a large monorepo in minutes. Answers structural queries in under 3 seconds — *"what should I read before editing X?"*
 
 Neo4j-backed code dependency graph. Ingest once, then opencode's MCP tools (`blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`) tell the agent exactly which files to read — no blind exploration.
