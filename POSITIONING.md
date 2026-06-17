@@ -1,4 +1,4 @@
-# GraphRAG — Positioning Brief
+# CodeCompass — Positioning Brief
 
 **Version:** 0.2
 **Date:** 2026-06-17
@@ -16,7 +16,7 @@ The context window is not the problem. The problem is that nothing persists when
 
 ## The one-liner
 
-> GraphRAG is the structural code context layer for AI agents — so they know what's connected, not just what's similar, before making any change.
+> CodeCompass is the structural code context layer for AI agents — so they know what's connected, not just what's similar, before making any change.
 
 ---
 
@@ -37,7 +37,7 @@ The context window is not the problem. The problem is that nothing persists when
 
 ## Measured impact
 
-| | Without GraphRAG | With GraphRAG |
+| | Without CodeCompass | With CodeCompass |
 |---|---|---|
 | LLM calls per task | 2 (navigate, then edit) | 1 (edit directly) |
 | Tokens per task | 26,164 | 14,210 |
@@ -52,13 +52,13 @@ The biggest win: without the graph, the agent guesses which files to read and ge
 
 ### vs. Embedding RAG / Graphify / vector search
 
-Other tools find what's **related**. GraphRAG finds what's **connected**.
+Other tools find what's **related**. CodeCompass finds what's **connected**.
 
 Embeddings and LLM-inferred knowledge graphs return files that look similar to your query. That's useful for exploration. It's not enough for refactoring.
 
-`file A imports file B` is not an inference — it's a fact in the syntax tree. GraphRAG reads it with tree-sitter, stores it as a typed edge (`[:IMPORTS]`, `[:CALLS]`, `[:INHERITS]`, …), and returns the complete dependency set. No approximation. No missed callers.
+`file A imports file B` is not an inference — it's a fact in the syntax tree. CodeCompass reads it with tree-sitter, stores it as a typed edge (`[:IMPORTS]`, `[:CALLS]`, `[:INHERITS]`, …), and returns the complete dependency set. No approximation. No missed callers.
 
-| | Embedding RAG / Graphify | GraphRAG |
+| | Embedding RAG / Graphify | CodeCompass |
 |---|---|---|
 | **Source** | Text content | AST (syntax tree) |
 | **Extraction** | LLM infers relationships | tree-sitter parses facts |
@@ -72,7 +72,7 @@ Obsidian is personal knowledge management — notes connected by links you creat
 
 ### vs. Sourcegraph
 
-Sourcegraph is code search — find where a symbol appears as text. GraphRAG is dependency traversal — find every file connected to a symbol through typed edges. Sourcegraph tells you where `writeCodeTriple` is mentioned. GraphRAG tells you every caller, transitively, three hops deep.
+Sourcegraph is code search — find where a symbol appears as text. CodeCompass is dependency traversal — find every file connected to a symbol through typed edges. Sourcegraph tells you where `writeCodeTriple` is mentioned. CodeCompass tells you every caller, transitively, three hops deep.
 
 ---
 
@@ -80,15 +80,15 @@ Sourcegraph is code search — find where a symbol appears as text. GraphRAG is 
 
 ### 1. The AST doesn't lie
 
-> *"Other tools find what's related. GraphRAG finds what's connected."*
+> *"Other tools find what's related. CodeCompass finds what's connected."*
 
-Every other approach — embeddings, LLM extraction, keyword search — derives relationships from reading text. GraphRAG derives them from the syntax tree. This distinction is critical when the cost of missing one file is a broken build or a partial migration.
+Every other approach — embeddings, LLM extraction, keyword search — derives relationships from reading text. CodeCompass derives them from the syntax tree. This distinction is critical when the cost of missing one file is a broken build or a partial migration.
 
 ### 2. Built for agents, not humans
 
 > *"It doesn't show you the graph. It gives the graph to the agent."*
 
-Obsidian and Graphify produce visualisations and chat interfaces for human exploration. GraphRAG produces an MCP server — the code graph becomes native tools (`blast_radius`, `impact`, `deps`, …) in the agent's tool palette, available from any working directory. Instructions mandate graph-first queries. Session memory accumulates automatically via the plugin. Every design decision assumes the consumer is an LLM, not a human browsing a UI.
+Obsidian and Graphify produce visualisations and chat interfaces for human exploration. CodeCompass produces an MCP server — the code graph becomes native tools (`blast_radius`, `impact`, `deps`, …) in the agent's tool palette, available from any working directory. Instructions mandate graph-first queries. Session memory accumulates automatically via the plugin. Every design decision assumes the consumer is an LLM, not a human browsing a UI.
 
 ---
 
@@ -148,7 +148,7 @@ The category ("structural code context for AI agents") does not exist yet. No bu
 **Implication for near-term focus:**
 - The product must create a "wow, I didn't know this existed" moment on first encounter — the MCP integration achieves this (tools appear alongside `read`, `edit`, `bash`)
 - The migration proof point is the wedge: lead with a concrete before/after story, not a feature list
-- MCP server shipped — any MCP-compatible agent can now call GraphRAG. Next: publish as a reusable MCP package.
+- MCP server shipped — any MCP-compatible agent can now call CodeCompass. Next: publish as a reusable MCP package.
 
 ---
 
@@ -156,7 +156,7 @@ The category ("structural code context for AI agents") does not exist yet. No bu
 
 AI coding agents are already powerful engineering assistants. The missing piece is continuity.
 
-GraphRAG is the layer that makes agents remember — across every session, every project, every machine, every team member. A developer using GraphRAG for six months has an assistant that knows their entire codebase, every architectural decision, every paper they've read, every pattern they've established. That assistant gets *more* useful over time, not the same.
+CodeCompass is the layer that makes agents remember — across every session, every project, every machine, every team member. A developer using CodeCompass for six months has an assistant that knows their entire codebase, every architectural decision, every paper they've read, every pattern they've established. That assistant gets *more* useful over time, not the same.
 
 The product: **an AI coding agent with a memory that compounds.**
 

@@ -1,4 +1,4 @@
-# GraphRAG — opencode Instructions
+# CodeCompass — opencode Instructions
 
 A Neo4j-backed code dependency graph is available via MCP tools. **Always query it before editing code.** The graph knows what's connected — trust it over file exploration.
 
@@ -6,7 +6,7 @@ A Neo4j-backed code dependency graph is available via MCP tools. **Always query 
 
 ## Available tools (MCP)
 
-All tools use the `graphrag` MCP server. Call them from any working directory.
+All tools use the `codecompass` MCP server. Call them from any working directory.
 
 | Tool | Purpose |
 |---|---|
@@ -38,7 +38,7 @@ All tools use the `graphrag` MCP server. Call them from any working directory.
 
 ## Mandatory rules
 
-1. **Before editing any file in an ingested project, call the graphrag tools first.**
+1. **Before editing any file in an ingested project, call the codecompass tools first.**
 2. Use `list_projects()` to discover what projects are available.
 3. Use `blast_radius` to understand impact before making changes.
 4. Use `impact` before renaming or removing anything.

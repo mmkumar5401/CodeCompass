@@ -1,4 +1,4 @@
-"""GraphRAG learnings saver — writes timestamped entry to memory/learnings.md.
+"""CodeCompass learnings saver — writes timestamped entry to memory/learnings.md.
 
 Triggered by the opencode plugin on session.compacted events.
 Extracts changed files and writes a placeholder for the LLM to fill.
@@ -11,8 +11,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-_GRAPHRAG_ROOT = Path(__file__).resolve().parent.parent.parent
-MEMORY_DIR = _GRAPHRAG_ROOT / "memory"
+_CODECOMPASS_ROOT = Path(__file__).resolve().parent.parent.parent
+MEMORY_DIR = _CODECOMPASS_ROOT / "memory"
 LEARNINGS_FILE = MEMORY_DIR / "learnings.md"
 
 
@@ -21,7 +21,7 @@ def _get_changed_files() -> list[str]:
         result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"],
             capture_output=True, text=True, timeout=5,
-            cwd=str(_GRAPHRAG_ROOT),
+            cwd=str(_CODECOMPASS_ROOT),
         )
         return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
     except Exception:

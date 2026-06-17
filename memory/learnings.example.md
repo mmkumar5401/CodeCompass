@@ -31,7 +31,7 @@ The session memory plugin also saves learnings before context is compacted.
 ## 2026-01-15: First ingest of my-repo
 - Ingested 312 files under project `my-repo` — took ~8s with no normalization pass
 - `--impact "MyClass"` returned 14 callers across 6 files — useful before refactoring
-- Watcher PID file lives at `/tmp/graphrag_watcher_my-repo.pid`
+- Watcher PID file lives at `/tmp/codecompass_watcher_my-repo.pid`
 
 ## 2026-01-16: Normalization pass findings
 - `--normalize` on 312 files took ~4 min and cost ~$0.02 in Haiku credits

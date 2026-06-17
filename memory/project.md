@@ -1,4 +1,4 @@
-# GraphRAG — Project Overview
+# CodeCompass — Project Overview
 
 Neo4j-backed code dependency index. Answers: **what should I read before editing X?**
 Neo4j at `bolt://localhost:7687` (configurable via `.env`).

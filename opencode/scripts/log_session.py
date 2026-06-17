@@ -1,4 +1,4 @@
-"""GraphRAG session logger — writes lightweight metadata to memory/session_log.md.
+"""CodeCompass session logger — writes lightweight metadata to memory/session_log.md.
 
 Triggered by the opencode plugin on session.idle events.
 Records timestamp + git diff summary so the session history is preserved.
@@ -11,8 +11,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-_GRAPHRAG_ROOT = Path(__file__).resolve().parent.parent.parent
-MEMORY_DIR = _GRAPHRAG_ROOT / "memory"
+_CODECOMPASS_ROOT = Path(__file__).resolve().parent.parent.parent
+MEMORY_DIR = _CODECOMPASS_ROOT / "memory"
 SESSION_LOG = MEMORY_DIR / "session_log.md"
 
 
@@ -21,7 +21,7 @@ def _get_changed_files() -> list[str]:
         result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"],
             capture_output=True, text=True, timeout=5,
-            cwd=str(_GRAPHRAG_ROOT),
+            cwd=str(_CODECOMPASS_ROOT),
         )
         return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
     except Exception:
@@ -29,7 +29,7 @@ def _get_changed_files() -> list[str]:
 
 
 def main() -> None:
-    working_dir = sys.argv[1] if len(sys.argv) > 1 else str(_GRAPHRAG_ROOT)
+    working_dir = sys.argv[1] if len(sys.argv) > 1 else str(_CODECOMPASS_ROOT)
 
     changed = _get_changed_files()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")

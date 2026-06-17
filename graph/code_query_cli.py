@@ -388,7 +388,7 @@ def _check_neo4j(project: str) -> None:
         ename = type(e).__name__
         if any(k in ename or k in msg for k in ("ServiceUnavailable", "ConnectionRefused", "refused", "timed out")):
             print("ERROR: Cannot connect to Neo4j at bolt://localhost:7687")
-            print("  Start it:  docker compose up -d   (from graphrag/)")
+            print("  Start it:  docker compose up -d   (from codecompass/)")
             print("  Then wait ~5s and retry.")
         elif any(k in ename or k in msg for k in ("AuthError", "Unauthorized", "authentication")):
             print("ERROR: Neo4j authentication failed.")

@@ -1,5 +1,5 @@
 /**
- * GraphRAG Session Memory Plugin for opencode.
+ * CodeCompass Session Memory Plugin for opencode.
  *
  * Replaces the old Claude Code hooks (SessionStart, PreCompact, Stop, PostToolUse)
  * with opencode-native equivalents.
@@ -17,10 +17,10 @@ const GRAPHRAG_ROOT = "/Users/manojkumarmuthukumaran/Documents/Work/graphrag"
 const MEMORY_SCRIPT = `${GRAPHRAG_ROOT}/opencode/scripts/save_learnings.py`
 const LOG_SCRIPT = `${GRAPHRAG_ROOT}/opencode/scripts/log_session.py`
 
-export const GraphRagMemory: Plugin = async ({ $, directory }) => {
+export const CodeCompassMemory: Plugin = async ({ $, directory }) => {
   return {
     "experimental.session.compacting": async (_input, output) => {
-      output.context.push(`## GraphRAG Session Memory
+      output.context.push(`## CodeCompass Session Memory
 
 Before generating the compaction summary, review this conversation and include:
 

@@ -1,4 +1,4 @@
-"""GraphRAG — code dependency index for LLM coding agents.
+"""CodeCompass — code dependency index for LLM coding agents.
 
 Commands:
     ingest-code <repo_path> --project <name> [--normalize] [--dump-triples <out.json>]
@@ -98,8 +98,8 @@ def ingest_code(repo_path: str, project_name: str, normalize: bool = False, dump
     _register_project_agents_md(repo_path, project_name)
 
 
-_GRAPHRAG_START = "<!-- graphrag-code-graph-start -->"
-_GRAPHRAG_END = "<!-- graphrag-code-graph-end -->"
+_CODECOMPASS_START = "<!-- codecompass-code-graph-start -->"
+_CODECOMPASS_END = "<!-- codecompass-code-graph-end -->"
 
 
 def _register_project_agents_md(repo_path: str, project_name: str) -> None:
@@ -110,12 +110,12 @@ def _register_project_agents_md(repo_path: str, project_name: str) -> None:
     import os, re
 
     block = (
-        f"{_GRAPHRAG_START}\n"
+        f"{_CODECOMPASS_START}\n"
         f"## Code graph\n\n"
-        f"This project is indexed in the GraphRAG code graph as `{project_name}`. "
+        f"This project is indexed in the CodeCompass code graph as `{project_name}`. "
         f"Query it before editing to know what to read:\n\n"
         f"```bash\n"
-        f"# Run from your graphrag install directory:\n"
+        f"# Run from your codecompass install directory:\n"
         f"python -m graph.code_query_cli --deps <file> --project {project_name}\n"
         f"python -m graph.code_query_cli --impact \"<function>\" --project {project_name}\n"
         f"python -m graph.code_query_cli --tree {project_name}\n"
@@ -124,7 +124,7 @@ def _register_project_agents_md(repo_path: str, project_name: str) -> None:
         f"```bash\n"
         f"python main.py ingest-code {repo_path} --project {project_name}\n"
         f"```\n"
-        f"{_GRAPHRAG_END}"
+        f"{_CODECOMPASS_END}"
     )
 
     agents_md_path = os.path.join(repo_path, "AGENTS.md")
@@ -132,8 +132,8 @@ def _register_project_agents_md(repo_path: str, project_name: str) -> None:
     if os.path.exists(agents_md_path):
         with open(agents_md_path) as f:
             content = f.read()
-        if _GRAPHRAG_START in content:
-            pattern = re.escape(_GRAPHRAG_START) + r".*?" + re.escape(_GRAPHRAG_END)
+        if _CODECOMPASS_START in content:
+            pattern = re.escape(_CODECOMPASS_START) + r".*?" + re.escape(_CODECOMPASS_END)
             new_content = re.sub(pattern, block, content, flags=re.DOTALL)
         else:
             new_content = content.rstrip() + f"\n\n---\n\n{block}\n"

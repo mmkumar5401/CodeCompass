@@ -1,7 +1,7 @@
-"""GraphRAG MCP Server — exposes code graph queries as native opencode tools.
+"""CodeCompass MCP Server — exposes code graph queries as native opencode tools.
 
 Registered in ~/.config/opencode/opencode.json as a local MCP server.
-Available from any working directory — no need to cd to the graphrag project.
+Available from any working directory — no need to cd to the codecompass project.
 
 Tools exposed:
     list_projects  — list all ingested projects
@@ -31,7 +31,7 @@ from mcp.server.fastmcp import FastMCP
 
 from graph.code_graph_client import get_client
 
-mcp = FastMCP("graphrag")
+mcp = FastMCP("codecompass")
 DEFAULT_HOPS = 3
 STALE_WARN_HOURS = 24
 

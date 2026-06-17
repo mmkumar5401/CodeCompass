@@ -27,7 +27,7 @@ from ingestion.code_parser import parse_file, SUPPORTED_EXTENSIONS
 
 def pid_file_path(project_name: str) -> str:
     """Return the path of the PID file for a given project's watcher process."""
-    return f"/tmp/graphrag_watcher_{project_name}.pid"
+    return f"/tmp/codecompass_watcher_{project_name}.pid"
 
 
 # ---------------------------------------------------------------------------

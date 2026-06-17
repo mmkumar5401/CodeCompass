@@ -1,4 +1,4 @@
-# GraphRAG — Progress & Roadmap
+# CodeCompass — Progress & Roadmap
 
 ## Goal
 
@@ -32,7 +32,7 @@ Updated to auto-configure opencode:
 - Installs MCP SDK alongside existing deps
 - Writes `~/.config/opencode/opencode.json` with MCP + instructions + plugin paths
 - Updates plugin with real filesystem paths
-- Safe merge — writes to `.graphrag.json` first, user copies to activate
+- Safe merge — writes to `.codecompass.json` first, user copies to activate
 
 ### AGENTS.md Auto-Registration ✅
 `ingest-code` now writes to `AGENTS.md` (opencode convention) instead of `CLAUDE.md`.
@@ -140,4 +140,4 @@ Code graph queries exposed as native MCP tools (blast_radius, impact, deps, etc.
 Export the traversal path as a Cypher subgraph and render it in Neo4j Browser or D3. Shows which memory nodes the model used to reach its answer.
 
 **13. Publish as reusable MCP package**
-Package `graph/mcp_server.py` as a standalone `graphrag-mcp` Python package on PyPI so any MCP-compatible agent can install it without cloning the full repo.
+Package `graph/mcp_server.py` as a standalone `codecompass-mcp` Python package on PyPI so any MCP-compatible agent can install it without cloning the full repo.

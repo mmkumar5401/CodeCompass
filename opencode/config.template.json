@@ -4,7 +4,7 @@
     "GRAPHRAG_ROOT/opencode/instructions.md"
   ],
   "mcp": {
-    "graphrag": {
+    "codecompass": {
       "type": "local",
       "command": ["python", "-m", "graph.mcp_server"],
       "cwd": "GRAPHRAG_ROOT",
@@ -15,6 +15,6 @@
     "GRAPHRAG_ROOT/opencode/plugins/memory.ts"
   ],
   "permission": {
-    "mcp__graphrag__*": "allow"
+    "mcp__codecompass__*": "allow"
   }
 }

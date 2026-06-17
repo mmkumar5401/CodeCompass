@@ -4,7 +4,7 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
-echo "=== GraphRAG setup for opencode ==="
+echo "=== CodeCompass setup for opencode ==="
 
 # 1. Python deps
 echo ""
@@ -48,8 +48,8 @@ except Exception as e:
 
 # 4. Ingest the codebase into the code graph
 echo ""
-echo "→ Ingesting codebase into code graph (project: graphrag)..."
-python main.py ingest-code . --project graphrag --skip-normalize
+echo "→ Ingesting codebase into code graph (project: codecompass)..."
+python main.py ingest-code . --project codecompass --skip-normalize
 echo "  Code graph ready."
 
 # 5. Set up memory files
@@ -74,21 +74,21 @@ if [ -f "$OPCODE_CONFIG_FILE" ]; then
 fi
 
 # Generate config from template with real paths
-sed "s|GRAPHRAG_ROOT|${REPO_ROOT}|g" opencode/config.template.json > "${OPCODE_CONFIG_DIR}/opencode.graphrag.json"
+sed "s|GRAPHRAG_ROOT|${REPO_ROOT}|g" opencode/config.template.json > "${OPCODE_CONFIG_DIR}/opencode.codecompass.json"
 
-echo "  Wrote config to ${OPCODE_CONFIG_DIR}/opencode.graphrag.json"
+echo "  Wrote config to ${OPCODE_CONFIG_DIR}/opencode.codecompass.json"
 echo ""
 echo "  To activate, merge this into your opencode config:"
 echo ""
-echo "    cp ${OPCODE_CONFIG_DIR}/opencode.graphrag.json ${OPCODE_CONFIG_FILE}"
+echo "    cp ${OPCODE_CONFIG_DIR}/opencode.codecompass.json ${OPCODE_CONFIG_FILE}"
 echo ""
-echo "  Or manually add the graphrag MCP + instructions + plugin sections."
-echo "  MCP server: graphrag"
+echo "  Or manually add the codecompass MCP + instructions + plugin sections."
+echo "  MCP server: codecompass"
 echo "  Instructions: ${REPO_ROOT}/opencode/instructions.md"
 echo "  Plugin: ${REPO_ROOT}/opencode/plugins/memory.ts"
 
 # 7. Update the plugin with the real path
-sed -i '' "s|REPLACE_WITH_GRAPHRAG_ROOT|${REPO_ROOT}|g" opencode/plugins/memory.ts
+sed -i '' "s|REPLACE_WITH_CODECOMPASS_ROOT|${REPO_ROOT}|g" opencode/plugins/memory.ts
 echo "  Plugin paths updated."
 
 echo ""

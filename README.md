@@ -1,4 +1,4 @@
-# GraphRAG — Code Intelligence Engine for AI Coding Agents
+# CodeCompass — Code Intelligence Engine for AI Coding Agents
 
 Full-indexes an average repository in seconds, a large monorepo in minutes. Answers structural queries in under 3 seconds — *"what should I read before editing X?"*
 
@@ -100,10 +100,10 @@ cp memory/learnings.example.md memory/learnings.md
 
 ```bash
 git clone <repo-url>
-cd graphrag
+cd codecompass
 ```
 
-**Verify:** you are inside the `graphrag` directory and can see `install.sh`, `main.py`, and `POSITIONING.md`.
+**Verify:** you are inside the `codecompass` directory and can see `install.sh`, `main.py`, and `POSITIONING.md`.
 
 ### Step 2 — Start Neo4j
 
@@ -143,7 +143,7 @@ NEO4J_PASSWORD=your_password
 ./install.sh
 ```
 
-This installs Python dependencies, checks Neo4j connectivity, ingests the graphrag codebase into the code graph, and prints confirmation.
+This installs Python dependencies, checks Neo4j connectivity, ingests the codecompass codebase into the code graph, and prints confirmation.
 
 **Verify:** script completes without errors and prints `=== Done ===`.
 
@@ -154,21 +154,21 @@ Makes the graph available from any directory via MCP tools + instructions. The i
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "instructions": ["/path/to/graphrag/opencode/instructions.md"],
+  "instructions": ["/path/to/codecompass/opencode/instructions.md"],
   "mcp": {
-    "graphrag": {
+    "codecompass": {
       "type": "local",
       "command": ["python", "-m", "graph.mcp_server"],
-      "cwd": "/path/to/graphrag"
+      "cwd": "/path/to/codecompass"
     }
   },
-  "plugin": ["/path/to/graphrag/opencode/plugins/memory.ts"]
+  "plugin": ["/path/to/codecompass/opencode/plugins/memory.ts"]
 }
 ```
 
-Replace `/path/to/graphrag` with the actual path.
+Replace `/path/to/codecompass` with the actual path.
 
-**Verify:** `opencode debug config` shows the graphrag MCP server and instructions loaded.
+**Verify:** `opencode debug config` shows the codecompass MCP server and instructions loaded.
 
 ### Step 6 — Open opencode
 
@@ -176,7 +176,7 @@ Replace `/path/to/graphrag` with the actual path.
 opencode
 ```
 
-The graphrag MCP tools (`blast_radius`, `impact`, `deps`, etc.) are available from any working directory. Instructions tell the agent to query the graph before editing.
+The codecompass MCP tools (`blast_radius`, `impact`, `deps`, etc.) are available from any working directory. Instructions tell the agent to query the graph before editing.
 
 **Verify:** Ask opencode "what ingested projects are available?" — it should use `list_projects` to answer.
 
@@ -239,21 +239,21 @@ In opencode, just ask naturally — instructions guide the agent:
   → agent calls list_projects()
 
 "what would break if I rename write_code_triple?"
-  → agent calls impact("write_code_triple", "graphrag")
+  → agent calls impact("write_code_triple", "codecompass")
 
 "I'm about to edit code_parser.py — what else is affected?"
-  → agent calls blast_radius("ingestion/code_parser.py", "graphrag")
+  → agent calls blast_radius("ingestion/code_parser.py", "codecompass")
 
 "I'm changing these 3 files — full blast radius?"
-  → agent calls batch_impact("file1, file2, file3", "graphrag")
+  → agent calls batch_impact("file1, file2, file3", "codecompass")
 
-"show me the graphrag project structure"
-  → agent calls tree("graphrag")
+"show me the codecompass project structure"
+  → agent calls tree("codecompass")
 ```
 
 For direct CLI access (bypassing the agent):
 ```bash
-python -m graph.code_query_cli --trace "run_agentic_agent" --project graphrag
+python -m graph.code_query_cli --trace "run_agentic_agent" --project codecompass
 python graph/query_cli.py --list-nodes
 python graph/ingest_cli.py --file path/to/paper.pdf
 ```
@@ -282,7 +282,7 @@ Keep the graph live as you edit files:
 python main.py watch /path/to/repo --project <name>
 ```
 
-Watches for file creates, modifies, deletes, and renames. Incrementally re-ingests only changed files. Writes a PID file to `/tmp/graphrag_watcher_<project>.pid` — the query CLI warns if the watcher isn't running.
+Watches for file creates, modifies, deletes, and renames. Incrementally re-ingests only changed files. Writes a PID file to `/tmp/codecompass_watcher_<project>.pid` — the query CLI warns if the watcher isn't running.
 
 ### `load-triples`
 
@@ -328,7 +328,7 @@ Typed relationships (not generic `RELATION {type: ...}`) mean variable-length pa
 ## Project structure
 
 ```
-graphrag/
+codecompass/
 ├── graph/
 │   ├── code_graph_client.py    Neo4j I/O — nodes, edges, traversal queries
 │   ├── code_query_cli.py       CLI — blast-radius / batch-impact / deps /
@@ -377,7 +377,7 @@ Password in `.env` doesn't match. Reset it in Neo4j Desktop or recreate the Dock
 The key is missing/invalid. Read-only queries and manual writes don't need it — only document ingestion does.
 
 **MCP tools not appearing**
-Run `opencode debug config` to verify the graphrag MCP server is registered. Restart opencode after config changes.
+Run `opencode debug config` to verify the codecompass MCP server is registered. Restart opencode after config changes.
 
 **`memory/learnings.md` is empty**
 Learnings are saved when compaction fires during long sessions. The plugin writes entries automatically on compaction and idle events.
