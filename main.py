@@ -5,6 +5,7 @@ Commands:
     load-triples <triples.json> --project <name>
     watch <repo_path> --project <name>
     dedupe-edges [--dry-run]
+    setup
 """
 
 import sys
@@ -73,7 +74,7 @@ def ingest_code(repo_path: str, project_name: str, normalize: bool = False, dump
             json.dump(data, f, indent=2)
         client.close()
         console.print(f"[bold green]Dumped {len(raw_triples)} raw triples to:[/] {dump_triples}")
-        console.print("[dim]Normalize them, then run: python main.py load-triples <file> --project <name>[/]")
+        console.print("[dim]Normalize them, then run: codecompass load-triples <file> --project <name>[/]")
         return
 
     if normalize:
@@ -116,13 +117,13 @@ def _register_project_agents_md(repo_path: str, project_name: str) -> None:
         f"Query it before editing to know what to read:\n\n"
         f"```bash\n"
         f"# Run from your codecompass install directory:\n"
-        f"python -m graph.code_query_cli --deps <file> --project {project_name}\n"
-        f"python -m graph.code_query_cli --impact \"<function>\" --project {project_name}\n"
-        f"python -m graph.code_query_cli --tree {project_name}\n"
+        f"codecompass --deps <file> --project {project_name}\n"
+        f"codecompass --impact \"<function>\" --project {project_name}\n"
+        f"codecompass --tree {project_name}\n"
         f"```\n\n"
         f"Re-ingest after adding files:\n"
         f"```bash\n"
-        f"python main.py ingest-code {repo_path} --project {project_name}\n"
+        f"codecompass ingest-code {repo_path} --project {project_name}\n"
         f"```\n"
         f"{_CODECOMPASS_END}"
     )
@@ -229,14 +230,16 @@ def dedupe_edges(dry_run: bool = False) -> None:
 
 
 def main():
+    prog = "codecompass"
     if len(sys.argv) < 2:
         console.print("[bold]Usage:[/]")
-        console.print("  python main.py ingest-code [italic]<repo_path>[/] --project [italic]<name>[/]")
-        console.print("  python main.py ingest-code [italic]<repo_path>[/] --project [italic]<name>[/] --normalize")
-        console.print("  python main.py ingest-code [italic]<repo_path>[/] --project [italic]<name>[/] --dump-triples [italic]<out.json>[/]")
-        console.print("  python main.py load-triples [italic]<triples.json>[/] --project [italic]<name>[/]")
-        console.print("  python main.py watch [italic]<repo_path>[/] --project [italic]<name>[/]")
-        console.print("  python main.py dedupe-edges [italic][--dry-run][/]")
+        console.print(f"  {prog} ingest-code [italic]<repo_path>[/] --project [italic]<name>[/]")
+        console.print(f"  {prog} ingest-code [italic]<repo_path>[/] --project [italic]<name>[/] --normalize")
+        console.print(f"  {prog} ingest-code [italic]<repo_path>[/] --project [italic]<name>[/] --dump-triples [italic]<out.json>[/]")
+        console.print(f"  {prog} load-triples [italic]<triples.json>[/] --project [italic]<name>[/]")
+        console.print(f"  {prog} watch [italic]<repo_path>[/] --project [italic]<name>[/]")
+        console.print(f"  {prog} dedupe-edges [italic][--dry-run][/]")
+        console.print(f"  {prog} setup")
         sys.exit(1)
 
     command = sys.argv[1]
@@ -244,7 +247,7 @@ def main():
     if command == "ingest-code":
         args = sys.argv[2:]
         if not args:
-            console.print("[red]Usage: python main.py ingest-code <repo_path> --project <name>[/]")
+            console.print(f"[red]Usage: {prog} ingest-code <repo_path> --project <name>[/]")
             sys.exit(1)
         repo_path = args[0]
         project_name = "default"
@@ -263,7 +266,7 @@ def main():
     elif command == "load-triples":
         args = sys.argv[2:]
         if not args:
-            console.print("[red]Usage: python main.py load-triples <triples.json> --project <name>[/]")
+            console.print(f"[red]Usage: {prog} load-triples <triples.json> --project <name>[/]")
             sys.exit(1)
         triples_file = args[0]
         project_name = "default"
@@ -276,7 +279,7 @@ def main():
     elif command == "watch":
         args = sys.argv[2:]
         if not args:
-            console.print("[red]Usage: python main.py watch <repo_path> --project <name>[/]")
+            console.print(f"[red]Usage: {prog} watch <repo_path> --project <name>[/]")
             sys.exit(1)
         repo_path = args[0]
         project_name = "default"
@@ -289,6 +292,10 @@ def main():
     elif command == "dedupe-edges":
         dry_run = "--dry-run" in sys.argv[2:]
         dedupe_edges(dry_run=dry_run)
+
+    elif command == "setup":
+        from graph.setup import run_setup
+        run_setup()
 
     else:
         console.print(f"[red]Unknown command:[/] {command}")

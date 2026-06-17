@@ -148,7 +148,7 @@ The category ("structural code context for AI agents") does not exist yet. No bu
 **Implication for near-term focus:**
 - The product must create a "wow, I didn't know this existed" moment on first encounter — the MCP integration achieves this (tools appear alongside `read`, `edit`, `bash`)
 - The migration proof point is the wedge: lead with a concrete before/after story, not a feature list
-- MCP server shipped — any MCP-compatible agent can now call CodeCompass. Next: publish as a reusable MCP package.
+- MCP server shipped — any MCP-compatible agent can now call CodeCompass via `pip install codecompass-mcp`
 
 ---
 

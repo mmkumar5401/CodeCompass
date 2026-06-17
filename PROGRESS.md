@@ -139,5 +139,6 @@ Code graph queries exposed as native MCP tools (blast_radius, impact, deps, etc.
 **12. Graph visualisation**
 Export the traversal path as a Cypher subgraph and render it in Neo4j Browser or D3. Shows which memory nodes the model used to reach its answer.
 
-**13. Publish as reusable MCP package**
-Package `graph/mcp_server.py` as a standalone `codecompass-mcp` Python package on PyPI so any MCP-compatible agent can install it without cloning the full repo.
+**13. Publish as reusable MCP package** ✅
+Packaged as `codecompass-mcp` on PyPI. `pip install codecompass-mcp` gives `codecompass` and `codecompass-mcp` commands.
+    Docker images available at `ghcr.io/<owner>/codecompass` as an alternative for containerized deployments.

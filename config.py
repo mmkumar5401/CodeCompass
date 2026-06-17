@@ -13,7 +13,4 @@ def neo4j_config() -> dict:
 
 
 def anthropic_api_key() -> str:
-    key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not key:
-        raise EnvironmentError("ANTHROPIC_API_KEY is not set")
-    return key
+    return os.getenv("ANTHROPIC_API_KEY", "")

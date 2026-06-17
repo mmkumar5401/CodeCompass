@@ -42,7 +42,7 @@ All tools use the `codecompass` MCP server. Call them from any working directory
 2. Use `list_projects()` to discover what projects are available.
 3. Use `blast_radius` to understand impact before making changes.
 4. Use `impact` before renaming or removing anything.
-5. If a tool returns a WARNING about stale index, suggest re-running `ingest-code`.
+5. If a tool returns a WARNING about stale index, suggest re-running `codecompass ingest-code`.
 6. The graph provides **structural truth** (AST-parsed). Trust it. It cannot tell you what code *means* — only what's connected.
 
 ---

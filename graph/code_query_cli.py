@@ -76,7 +76,7 @@ def run_list_projects(rich: bool = False) -> None:
 
     if not projects:
         print("No projects ingested yet.")
-        print("  Run: python main.py ingest-code <repo_path> --project <name>")
+        print("  Run: codecompass ingest-code <repo_path> --project <name>")
         return
 
     if rich:
@@ -405,7 +405,7 @@ def _check_watcher(project: str) -> None:
     if not os.path.exists(pid_file):
         print(f"WARNING: Watcher is not running for project '{project}'.")
         print(f"  Files edited outside this session won't be re-indexed automatically.")
-        print(f"  Start it:  python main.py watch <repo_path> --project {project}")
+        print(f"  Start it:  codecompass watch <repo_path> --project {project}")
         return
     try:
         with open(pid_file) as f:
@@ -417,7 +417,7 @@ def _check_watcher(project: str) -> None:
         except OSError:
             pass
         print(f"WARNING: Watcher for project '{project}' is no longer running (stale PID file removed).")
-        print(f"  Start it:  python main.py watch <repo_path> --project {project}")
+        print(f"  Start it:  codecompass watch <repo_path> --project {project}")
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +432,7 @@ def _staleness_line(timestamp: str | None, rich_mode: bool = False) -> str | Non
         ts = datetime.fromisoformat(timestamp)
         age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
         if age_h > STALE_WARN_HOURS:
-            warn = f"  WARNING: {age_h:.0f}h old — re-run: python main.py ingest-code . --project <name>"
+            warn = f"  WARNING: {age_h:.0f}h old — re-run: codecompass ingest-code . --project <name>"
             if rich_mode:
                 return f"[yellow]# index updated: {timestamp}{warn}[/]"
             return f"# index updated: {timestamp}{warn}"

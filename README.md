@@ -10,9 +10,10 @@ Neo4j-backed code dependency graph. Ingest once, then opencode's MCP tools (`bla
 
 | Feature | Description |
 |---|---|
+| PyPI package | `pip install codecompass-mcp` — works with any MCP-compatible agent |
 | MCP server | Code graph exposed as native opencode tools — `blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`, `list_projects` |
-| opencode plugin | Session memory auto-saves on compaction + idle — replaces old Claude Code hooks |
-| One-command setup | `./install.sh` installs deps, ingests code, writes opencode config with MCP + instructions + plugin |
+| opencode plugin | Session memory auto-saves on compaction + idle |
+| One-command setup | `pip install` + `codecompass ingest-code` — no clone required |
 | Auto-registration | `ingest-code` writes `AGENTS.md` (opencode convention) instead of `CLAUDE.md` |
 
 ---
@@ -54,161 +55,137 @@ Instructions (loaded via `opencode/instructions.md`) mandate: **always query the
 ### Prerequisites
 
 - Python 3.10+
-- Docker (for Neo4j)
+- Neo4j (any of the options below)
 - opencode CLI
 
-### Start Neo4j
+### 1. Install the package
 
 ```bash
-docker compose up -d
+pip install codecompass-mcp
 ```
 
-### Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### Configure `.env`
-
-```bash
-cp .env.example .env
-# Edit: set NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, ANTHROPIC_API_KEY
-```
-
-### Ingest a codebase
-
-```bash
-python main.py ingest-code /path/to/repo --project <name>
-```
-
-This writes a `## Code graph` section into the project's `AGENTS.md` automatically, so opencode picks up the graph context on the next session.
-
-### Set up session memory (optional)
-
-```bash
-cp memory/learnings.example.md memory/learnings.md
-```
-
-`memory/learnings.md` is gitignored — your notes stay local. opencode's session plugin auto-saves learnings on compaction and idle.
-
----
-
-## Detailed setup walkthrough
-
-### Step 1 — Clone the repository
-
-```bash
-git clone <repo-url>
-cd codecompass
-```
-
-**Verify:** you are inside the `codecompass` directory and can see `install.sh`, `main.py`, and `POSITIONING.md`.
-
-### Step 2 — Start Neo4j
+### 2. Start Neo4j
 
 Pick one:
 
 **Docker (fastest)**
 ```bash
-docker run --name neo4j -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/your_password neo4j:latest
+docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password123 neo4j:5.18
 ```
 
-**Neo4j Desktop** — Download from [neo4j.com/download](https://neo4j.com/download), create project → Add → Local DBMS, set password, click Start.
+**Docker Compose** — clone the repo and run:
+```bash
+git clone https://github.com/<owner>/codecompass.git
+cd codecompass
+docker compose up -d
+```
 
-**AuraDB (cloud)** — Sign up at [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura), create a free instance, copy the URI/username/password.
+**Neo4j Desktop** — Download from [neo4j.com/download](https://neo4j.com/download)
 
-**Verify:** Neo4j is reachable at `bolt://localhost:7687`. The Neo4j Browser at `http://localhost:7474` should load (if local).
+**AuraDB (cloud)** — [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura)
 
-### Step 3 — Configure environment
+### 3. Configure
 
 ```bash
 cp .env.example .env
+# Set NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+# ANTHROPIC_API_KEY is optional — only needed for document ingestion
 ```
 
-Fill in:
-```
-ANTHROPIC_API_KEY=your_key_here          # from console.anthropic.com (needed for doc ingestion only)
-NEO4J_URI=bolt://localhost:7687           # use neo4j+s:// for AuraDB
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
-```
-
-**Verify:** `.env` has real values, not placeholders.
-
-### Step 4 — Run the installer
+### 4. Ingest a codebase
 
 ```bash
-./install.sh
+codecompass ingest-code /path/to/repo --project <name>
 ```
 
-This installs Python dependencies, checks Neo4j connectivity, ingests the codecompass codebase into the code graph, and prints confirmation.
+This writes a `## Code graph` section into the project's `AGENTS.md` automatically.
 
-**Verify:** script completes without errors and prints `=== Done ===`.
+### 5. Register with opencode
 
-### Step 5 — Register globally with opencode (recommended)
+Run the setup wizard — it writes instructions, the memory plugin, helper scripts, and prints the config block:
 
-Makes the graph available from any directory via MCP tools + instructions. The installer writes this config to `~/.config/opencode/opencode.json`:
+```bash
+codecompass setup
+```
+
+This outputs JSON to merge into `~/.config/opencode/opencode.json`. The resulting config:
 
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
-  "instructions": ["/path/to/codecompass/opencode/instructions.md"],
+  "instructions": ["~/.config/opencode/codecompass/instructions.md"],
   "mcp": {
     "codecompass": {
       "type": "local",
-      "command": ["python", "-m", "graph.mcp_server"],
-      "cwd": "/path/to/codecompass"
+      "command": ["codecompass-mcp"]
     }
   },
-  "plugin": ["/path/to/codecompass/opencode/plugins/memory.ts"]
+  "plugin": ["~/.config/opencode/codecompass/plugins/memory.ts"]
 }
 ```
 
-Replace `/path/to/codecompass` with the actual path.
+All files are self-contained in `~/.config/opencode/codecompass/` — no repo clone needed.
 
-**Verify:** `opencode debug config` shows the codecompass MCP server and instructions loaded.
-
-### Step 6 — Open opencode
+### 6. Open opencode
 
 ```bash
 opencode
 ```
 
-The codecompass MCP tools (`blast_radius`, `impact`, `deps`, etc.) are available from any working directory. Instructions tell the agent to query the graph before editing.
+Ask "what ingested projects are available?" — it should use `list_projects` to answer.
 
-**Verify:** Ask opencode "what ingested projects are available?" — it should use `list_projects` to answer.
+### Docker (alternative)
 
-### Step 7 — Add your first knowledge
+Prefer everything containerized? Pull the pre-built image:
 
-**Ingest a document (uses Haiku, requires API key)**
 ```bash
-python graph/ingest_cli.py --file path/to/paper.pdf
-python graph/ingest_cli.py --url "https://arxiv.org/abs/2105.00188"
+docker pull ghcr.io/<owner>/codecompass:latest
+docker run -d -p 8000:8000 \
+  -e NEO4J_URI=bolt://<host>:7687 \
+  -e NEO4J_USER=neo4j \
+  -e NEO4J_PASSWORD=password123 \
+  ghcr.io/<owner>/codecompass:latest
 ```
 
-**Write facts directly (free, no API cost)**
+Then configure opencode with `"type": "http", "url": "http://localhost:8000/sse"` for the MCP server. Run `codecompass setup` for instructions + plugin files.
+
+---
+
+## Commands
+
+### `ingest-code`
+
 ```bash
-python graph/remember_batch_cli.py '[
-  {"from": "Concept A", "relation": "CAUSES", "to": "Concept B"},
-  {"from": "System X", "relation": "IMPLEMENTS", "to": "Algorithm Y"}
-]'
+codecompass ingest-code /path/to/repo --project <name>
+codecompass ingest-code /path/to/repo --project <name> --normalize
+codecompass ingest-code /path/to/repo --project <name> --dump-triples /tmp/raw.json
 ```
 
-**Ingest another codebase**
+### `watch`
+
+Keep the graph live as you edit files:
+
 ```bash
-python main.py ingest-code /path/to/other-repo --project myproject
+codecompass watch /path/to/repo --project <name>
 ```
 
-**Verify:** `python graph/query_cli.py --list-nodes` shows the entities you just added.
+Watches for file creates, modifies, deletes, and renames. Incrementally re-ingests only changed files. The query CLI warns if the watcher isn't running.
 
-### Step 8 — Verify automations work
+### `load-triples`
 
-- **MCP tools:** ask opencode to use `list_projects` or `blast_radius` — tools respond from any directory.
-- **Instructions:** the agent queries the graph before editing files in ingested projects.
-- **Session memory:** compaction auto-saves learnings to `memory/learnings.md`. Check the file after a long session.
-- **Session log:** `memory/session_log.md` gets timestamped entries on session idle events.
+Load pre-processed triples (e.g. after external normalization):
+
+```bash
+codecompass load-triples /tmp/normalized.json --project <name>
+```
+
+### Direct CLI queries (bypassing the agent)
+
+```bash
+python -m graph.code_query_cli --blast-radius path/to/file.py --project <project>
+python -m graph.code_query_cli --impact "FunctionName" --project <project>
+python -m graph.code_query_cli --tree <project>
+```
 
 ---
 
@@ -249,47 +226,6 @@ In opencode, just ask naturally — instructions guide the agent:
 
 "show me the codecompass project structure"
   → agent calls tree("codecompass")
-```
-
-For direct CLI access (bypassing the agent):
-```bash
-python -m graph.code_query_cli --trace "run_agentic_agent" --project codecompass
-python graph/query_cli.py --list-nodes
-python graph/ingest_cli.py --file path/to/paper.pdf
-```
-
----
-
-## Commands
-
-### `ingest-code`
-
-```bash
-python main.py ingest-code /path/to/repo --project <name>
-
-# With Haiku LLM normalization (slower, cleans up noisy entity names)
-python main.py ingest-code /path/to/repo --project <name> --normalize
-
-# Dump raw triples to JSON for external processing
-python main.py ingest-code /path/to/repo --project <name> --dump-triples /tmp/raw.json
-```
-
-### `watch`
-
-Keep the graph live as you edit files:
-
-```bash
-python main.py watch /path/to/repo --project <name>
-```
-
-Watches for file creates, modifies, deletes, and renames. Incrementally re-ingests only changed files. Writes a PID file to `/tmp/codecompass_watcher_<project>.pid` — the query CLI warns if the watcher isn't running.
-
-### `load-triples`
-
-Load pre-processed triples (e.g. after external normalization):
-
-```bash
-python main.py load-triples /tmp/normalized.json --project <name>
 ```
 
 ---
@@ -368,13 +304,13 @@ This means opencode automatically picks up the right `--project` name and query 
 ## Troubleshooting
 
 **`connection refused` on Neo4j**
-Neo4j is not running. Start your DBMS or run the Docker command from Step 2.
+Neo4j is not running. Start your DBMS or use `docker run -d neo4j`.
 
 **`authentication failure` on Neo4j**
 Password in `.env` doesn't match. Reset it in Neo4j Desktop or recreate the Docker container.
 
-**`ANTHROPIC_API_KEY` error during ingest**
-The key is missing/invalid. Read-only queries and manual writes don't need it — only document ingestion does.
+**`codecompass: command not found`**
+Run `pip install codecompass-mcp` to install the CLI.
 
 **MCP tools not appearing**
 Run `opencode debug config` to verify the codecompass MCP server is registered. Restart opencode after config changes.
@@ -391,4 +327,4 @@ Learnings are saved when compaction fires during long sessions. The plugin write
 - External callers (consumers outside the ingested repo) won't appear in `impact`
 - Lit CSS extraction covers explicit `var(--foo)` usages and `:host { --foo: ... }` declarations; generated property names from `theme.props()` patterns are not yet indexed
 - If Neo4j is down, the MCP server returns a clear error instead of a traceback
-- The watcher (`python main.py watch`) is separate from the MCP server — keep it running for live re-indexing on file changes
+- The watcher (`codecompass watch`) is separate from the MCP server — keep it running for live re-indexing on file changes

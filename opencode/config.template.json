@@ -1,18 +1,17 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
-    "GRAPHRAG_ROOT/opencode/instructions.md"
+    "~/.config/opencode/codecompass/instructions.md"
   ],
   "mcp": {
     "codecompass": {
       "type": "local",
-      "command": ["python", "-m", "graph.mcp_server"],
-      "cwd": "GRAPHRAG_ROOT",
+      "command": ["codecompass-mcp"],
       "enabled": true
     }
   },
   "plugin": [
-    "GRAPHRAG_ROOT/opencode/plugins/memory.ts"
+    "~/.config/opencode/codecompass/plugins/memory.ts"
   ],
   "permission": {
     "mcp__codecompass__*": "allow"

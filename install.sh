@@ -5,12 +5,12 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT"
 
 echo "=== CodeCompass setup for opencode ==="
+echo "Tip: pip install codecompass-mcp is the fastest way."
 
 # 1. Python deps
 echo ""
 echo "→ Installing Python dependencies..."
-pip install -r requirements.txt -q
-pip install mcp -q
+pip install -e .[dev] -q
 echo "  Dependencies installed (including MCP SDK)."
 
 # 2. .env
@@ -49,7 +49,7 @@ except Exception as e:
 # 4. Ingest the codebase into the code graph
 echo ""
 echo "→ Ingesting codebase into code graph (project: codecompass)..."
-python main.py ingest-code . --project codecompass --skip-normalize
+python -m main ingest-code . --project codecompass
 echo "  Code graph ready."
 
 # 5. Set up memory files
@@ -60,45 +60,13 @@ touch memory/learnings.md
 touch memory/session_log.md
 echo "  memory/ ready."
 
-# 6. Generate opencode config
-OPCODE_CONFIG_DIR="${HOME}/.config/opencode"
-OPCODE_CONFIG_FILE="${OPCODE_CONFIG_DIR}/opencode.json"
-
+# 6. Generate opencode config via setup
 echo ""
-echo "→ Generating opencode config..."
-mkdir -p "$OPCODE_CONFIG_DIR"
-
-if [ -f "$OPCODE_CONFIG_FILE" ]; then
-  echo "  Existing opencode config found. Creating backup..."
-  cp "$OPCODE_CONFIG_FILE" "${OPCODE_CONFIG_FILE}.backup.$(date +%s)"
-fi
-
-# Generate config from template with real paths
-sed "s|GRAPHRAG_ROOT|${REPO_ROOT}|g" opencode/config.template.json > "${OPCODE_CONFIG_DIR}/opencode.codecompass.json"
-
-echo "  Wrote config to ${OPCODE_CONFIG_DIR}/opencode.codecompass.json"
+echo "→ Running codecompass setup..."
+python -m graph.setup
 echo ""
-echo "  To activate, merge this into your opencode config:"
-echo ""
-echo "    cp ${OPCODE_CONFIG_DIR}/opencode.codecompass.json ${OPCODE_CONFIG_FILE}"
-echo ""
-echo "  Or manually add the codecompass MCP + instructions + plugin sections."
-echo "  MCP server: codecompass"
-echo "  Instructions: ${REPO_ROOT}/opencode/instructions.md"
-echo "  Plugin: ${REPO_ROOT}/opencode/plugins/memory.ts"
 
-# 7. Update the plugin with the real path
-sed -i '' "s|REPLACE_WITH_CODECOMPASS_ROOT|${REPO_ROOT}|g" opencode/plugins/memory.ts
-echo "  Plugin paths updated."
-
-echo ""
 echo "=== Done ==="
 echo ""
-echo "Restart opencode for the memory layer to take effect."
-echo ""
-echo "The following are now active from any directory:"
-echo "  • MCP tools: blast_radius, impact, deps, trace, tree, styles, batch_impact, list_projects"
-echo "  • Instructions: always query the graph before editing code"
-echo "  • Session memory: auto-saves learnings on compaction + idle"
-echo ""
+echo "Restart opencode for CodeCompass to take effect."
 echo "Try: opencode"

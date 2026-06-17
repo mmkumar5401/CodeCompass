@@ -37,3 +37,4 @@ benchmarks/results/*.json
 
 # Personal session notes (copy learnings.example.md → learnings.md after cloning)
 memory/learnings.md
+memory/session_log.md

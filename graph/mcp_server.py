@@ -67,7 +67,7 @@ def list_projects() -> str:
         client.close()
 
     if not projects:
-        return "No projects ingested yet.\n  Run: python main.py ingest-code <repo_path> --project <name>"
+        return "No projects ingested yet.\n  Run: codecompass ingest-code <repo_path> --project <name>"
 
     return "Ingested projects:\n" + "\n".join(f"  {p}" for p in projects)
 
@@ -267,5 +267,14 @@ def tree(project: str) -> str:
 
 # ── entry point ──────────────────────────────────────────────────────────────
 
+def main() -> None:
+    transport = sys.argv[1] if len(sys.argv) > 1 else "stdio"
+    if transport == "sse":
+        port = int(sys.argv[2]) if len(sys.argv) > 2 else 8000
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
+    else:
+        mcp.run()
+
+
 if __name__ == "__main__":
-    mcp.run()
+    main()
