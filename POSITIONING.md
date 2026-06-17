@@ -1,10 +1,18 @@
 # GraphRAG — Positioning Brief
 
-**Version:** 0.1
-**Date:** 2026-06-14
-**Status:** Confirmed
+**Version:** 0.2
+**Date:** 2026-06-17
+**Status:** Active
 
 ---
+
+## The Problem
+
+Every time you open an AI coding agent, it starts from zero. It doesn't know what you built last week, why you made architectural decisions, or which file to edit. You spend the first 10 minutes re-explaining your project. You watch the agent read wrong files. You answer the same questions every session. **You are the memory. And that doesn't scale.**
+
+## The Insight
+
+The context window is not the problem. The problem is that nothing persists when it closes. The fix isn't a bigger context window — it's memory that lives outside the context window and gets loaded back in when needed.
 
 ## The one-liner
 
@@ -24,6 +32,19 @@
 | **Why They Choose Us** | Team reaction: "amazed it exists." Concrete proof: token→semantic migration completed without missed usages |
 | **Why They Reject / Leave** | No rejection evidence yet — primary barrier is awareness, not objection |
 | **Key Differentiator** | AST-derived structural truth. Agent-native output. |
+
+---
+
+## Measured impact
+
+| | Without GraphRAG | With GraphRAG |
+|---|---|---|
+| LLM calls per task | 2 (navigate, then edit) | 1 (edit directly) |
+| Tokens per task | 26,164 | 14,210 |
+| Cost per task | $1.80 | $1.27 |
+| Savings | — | **−46% tokens, −30% cost** |
+
+The biggest win: without the graph, the agent guesses which files to read and gets it wrong (one wrong file read added 9,000 tokens to a single task). The graph eliminates wrong reads entirely.
 
 ---
 
@@ -67,7 +88,7 @@ Every other approach — embeddings, LLM extraction, keyword search — derives 
 
 > *"It doesn't show you the graph. It gives the graph to the agent."*
 
-Obsidian and Graphify produce visualisations and chat interfaces for human exploration. GraphRAG produces plain-text dependency lists the agent can act on immediately. Every design decision (CLI-first, plain text default, CLAUDE.md auto-registration, watcher PID tracking) assumes the consumer is a machine.
+Obsidian and Graphify produce visualisations and chat interfaces for human exploration. GraphRAG produces an MCP server — the code graph becomes native tools (`blast_radius`, `impact`, `deps`, …) in the agent's tool palette, available from any working directory. Instructions mandate graph-first queries. Session memory accumulates automatically via the plugin. Every design decision assumes the consumer is an LLM, not a human browsing a UI.
 
 ---
 
@@ -89,17 +110,28 @@ This is the sharpest demonstration of the JTBD: **the agent made a complete chan
 
 ---
 
+## Current state
+
+- **MCP server** — 8 tools (blast_radius, impact, deps, trace, tree, styles, batch_impact, list_projects) exposed as native agent tools
+- **opencode plugin** — session memory auto-saves on compaction + idle
+- **Instructions** — graph-first rules loaded into every session
+- **One-command setup** — `./install.sh` from clone to working in minutes
+- **Measured** — 46% token reduction, 30% cost reduction on realistic tasks
+- **Open source** — runs locally, your data stays on your machine
+
+---
+
 ## Roadmap priorities (from feature audit)
 
 Ranked by RICE score against confirmed positioning:
 
-| Priority | Feature | Rationale tag | RICE |
-|---|---|---|---|
-| 1 | **Blast radius preview** | `supports-JTBD` `differentiator` | 84 |
-| 2 | **Batch impact analysis** | `supports-JTBD` | 80 |
-| 3 | **MCP server** | `differentiator` `category-hygiene` | 64 |
-| 4 | **Git diff integration** | `supports-JTBD` `differentiator` | 48 |
-| 5 | **Language expansion** (Go, Java, Rust) | `category-hygiene` | 30/lang |
+| Priority | Feature | Rationale tag | RICE | Status |
+|---|---|---|---|---|
+| 1 | **Blast radius preview** | `supports-JTBD` `differentiator` | 84 | ✅ Done |
+| 2 | **Batch impact analysis** | `supports-JTBD` | 80 | ✅ Done |
+| 3 | **MCP server** | `differentiator` `category-hygiene` | 64 | ✅ Done |
+| 4 | **Git diff integration** | `supports-JTBD` `differentiator` | 48 | — |
+| 5 | **Language expansion** (Go, Java, Rust) | `category-hygiene` | 30/lang | —
 
 **Blocked (insufficient evidence or cost):**
 - VS Code extension — no evidence agents need a GUI
@@ -114,9 +146,19 @@ Ranked by RICE score against confirmed positioning:
 The category ("structural code context for AI agents") does not exist yet. No buyer has a mental shelf for it. This is both the opportunity (define it, own it) and the primary challenge (explain it from scratch every time).
 
 **Implication for near-term focus:**
-- The product must create a "wow, I didn't know this existed" moment on first encounter — it already does (team reaction evidence)
+- The product must create a "wow, I didn't know this existed" moment on first encounter — the MCP integration achieves this (tools appear alongside `read`, `edit`, `bash`)
 - The migration proof point is the wedge: lead with a concrete before/after story, not a feature list
-- MCP server is the highest-leverage move for category definition: when any agent in any tool can call GraphRAG, the category becomes self-evident
+- MCP server shipped — any MCP-compatible agent can now call GraphRAG. Next: publish as a reusable MCP package.
+
+---
+
+## The vision
+
+AI coding agents are already powerful engineering assistants. The missing piece is continuity.
+
+GraphRAG is the layer that makes agents remember — across every session, every project, every machine, every team member. A developer using GraphRAG for six months has an assistant that knows their entire codebase, every architectural decision, every paper they've read, every pattern they've established. That assistant gets *more* useful over time, not the same.
+
+The product: **an AI coding agent with a memory that compounds.**
 
 ---
 
@@ -124,4 +166,5 @@ The category ("structural code context for AI agents") does not exist yet. No bu
 
 | Version | Date | Change |
 |---|---|---|
+| 0.2 | 2026-06-17 | MCP server shipped, opencode plugin, one-command setup, multi-agent positioning |
 | 0.1 | 2026-06-14 | Initial brief — segment, JTBD, category, differentiators confirmed |

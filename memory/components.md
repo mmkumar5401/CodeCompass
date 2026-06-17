@@ -55,8 +55,10 @@ The code parser handles these languages and emits these edge types:
 
 ## Hooks (auto-running)
 
-| Hook | Script | Trigger |
-|---|---|---|
-| SessionStart | `scripts/session_start.py` | Every Claude session opens — injects `memory/` as context |
-| Stop | `scripts/auto_memory.py` | Every Claude session ends — extracts new facts, writes to `memory/` |
-| PostToolUse (Write/Edit) | `scripts/on_file_change.py` | Every file save — re-ingests changed file into code graph |
+opencode-native plugin at `opencode/plugins/memory.ts`:
+
+| Event | Action |
+|---|---|
+| `session.compacting` | Injects learnings context into compaction prompt |
+| `session.compacted` | Saves learnings placeholder to `memory/learnings.md` |
+| `session.idle` | Logs session metadata to `memory/session_log.md` |

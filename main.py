@@ -85,11 +85,7 @@ def ingest_code(repo_path: str, project_name: str, normalize: bool = False, dump
         triples = raw_triples
 
     console.print("[dim]Phase 4/4 — Writing to Neo4j…[/]")
-    written = 0
-    for triple in tqdm(triples, desc="Writing triples", unit="triple"):
-        file_node_id = file_id_map.get(triple.source_file, "")
-        client.write_code_triple(triple, file_node_id, project_name)
-        written += 1
+    written = client.write_code_triples_batch(triples, file_id_map, project_name)
 
     total_nodes = client.node_count()
     client.close()
@@ -98,15 +94,15 @@ def ingest_code(repo_path: str, project_name: str, normalize: bool = False, dump
         f"[bold green]Done.[/] Wrote {written} triples. "
         f"Graph now has {total_nodes} nodes."
     )
-    _register_project_claude_md(repo_path, project_name)
+    _register_project_agents_md(repo_path, project_name)
 
 
 _GRAPHRAG_START = "<!-- graphrag-code-graph-start -->"
 _GRAPHRAG_END = "<!-- graphrag-code-graph-end -->"
 
 
-def _register_project_claude_md(repo_path: str, project_name: str) -> None:
-    """Write or update the Code graph section in the project's CLAUDE.md.
+def _register_project_agents_md(repo_path: str, project_name: str) -> None:
+    """Write or update the Code graph section in the project's AGENTS.md.
 
     Uses HTML comment markers so re-ingesting safely replaces only that block.
     """
@@ -130,10 +126,10 @@ def _register_project_claude_md(repo_path: str, project_name: str) -> None:
         f"{_GRAPHRAG_END}"
     )
 
-    claude_md_path = os.path.join(repo_path, "CLAUDE.md")
+    agents_md_path = os.path.join(repo_path, "AGENTS.md")
 
-    if os.path.exists(claude_md_path):
-        with open(claude_md_path) as f:
+    if os.path.exists(agents_md_path):
+        with open(agents_md_path) as f:
             content = f.read()
         if _GRAPHRAG_START in content:
             pattern = re.escape(_GRAPHRAG_START) + r".*?" + re.escape(_GRAPHRAG_END)
@@ -143,16 +139,15 @@ def _register_project_claude_md(repo_path: str, project_name: str) -> None:
     else:
         new_content = block + "\n"
 
-    with open(claude_md_path, "w") as f:
+    with open(agents_md_path, "w") as f:
         f.write(new_content)
 
-    console.print(f"[dim]  Registered in {claude_md_path}[/]")
+    console.print(f"[dim]  Registered in {agents_md_path}[/]")
 
 
 def load_triples(triples_file: str, project_name: str) -> None:
     """Load pre-normalized triples from a JSON file into the code graph."""
     import json
-    from tqdm import tqdm
     from models.code_types import CodeTriple
 
     with open(triples_file) as f:
@@ -175,11 +170,7 @@ def load_triples(triples_file: str, project_name: str) -> None:
     client = get_client(project_name)
     file_id_map = get_file_id_map(project_name, client)
 
-    written = 0
-    for triple in tqdm(triples, desc="Writing triples", unit="triple"):
-        file_node_id = file_id_map.get(triple.source_file, "")
-        client.write_code_triple(triple, file_node_id, project_name)
-        written += 1
+    written = client.write_code_triples_batch(triples, file_id_map, project_name)
 
     total_nodes = client.node_count()
     client.close()

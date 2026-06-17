@@ -12,7 +12,7 @@ cp memory/learnings.example.md memory/learnings.md
 
 ## How to use
 
-Add a dated section after each meaningful session. Say **"store my session"** and Claude will write distilled insights here automatically. Or write directly.
+Add a dated section after each meaningful session. opencode's session memory plugin auto-saves learnings on compaction. Or write directly.
 
 Format:
 
@@ -22,7 +22,7 @@ Format:
 - <keep to 4–8 bullets, skip routine edits>
 ```
 
-The `PreCompact` hook also prompts Claude to save learnings before context is compressed.
+The session memory plugin also saves learnings before context is compacted.
 
 ---
 

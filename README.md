@@ -1,62 +1,51 @@
-# GraphRAG — Code Dependency Index for Claude Code
+# GraphRAG — Code Dependency Index for AI Coding Agents
 
 Answers one question: **what should I read before editing X?**
 
-It's a Neo4j-backed code dependency index. Ingest a repo once, then ask Claude Code which files to read before touching anything — without blindly exploring.
+It's a Neo4j-backed code dependency index. Ingest a repo once, then ask opencode which files to read before touching anything — without blindly exploring.
 
 ---
 
-## What's new in v1.1
+## What's new in v2.0
 
-| Feature | Flag | Description |
-|---|---|---|
-| Blast radius preview | `--blast-radius` | All files reachable from a symbol or file before you start editing |
-| Batch impact analysis | `--batch-impact` | Union blast radius across multiple targets — plan a whole PR at once |
-| Lit CSS token extraction | _(automatic)_ | `var()` usages and `--prop` declarations inside `` css`...` `` in `.styles.ts` files now indexed |
+| Feature | Description |
+|---|---|
+| MCP server | Code graph exposed as native opencode tools — `blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`, `list_projects` |
+| opencode plugin | Session memory auto-saves on compaction + idle — replaces old Claude Code hooks |
+| One-command setup | `./install.sh` installs deps, ingests code, writes opencode config with MCP + instructions + plugin |
+| Auto-registration | `ingest-code` writes `AGENTS.md` (opencode convention) instead of `CLAUDE.md` |
 
 ---
 
 ## What it does
 
-```bash
-# Before editing anything — see every file the change will touch
-python -m graph.code_query_cli --blast-radius ingestion/file_watcher.py --project graphrag
-python -m graph.code_query_cli --blast-radius "write_code_triple" --project graphrag
+Once configured, opencode has 8 native MCP tools for graph queries. The agent calls them automatically — no manual CLI needed.
 
-# Planning a PR that touches multiple files — union of all blast radii
-python -m graph.code_query_cli --batch-impact ingestion/file_watcher.py graph/code_graph_client.py --project graphrag
-
-# What does this file import (direct + transitive)?
-python -m graph.code_query_cli --deps ingestion/file_watcher.py --project graphrag
-
-# What would break if I change this function?
-python -m graph.code_query_cli --impact "write_code_triple" --project graphrag
-
-# Trace the call chain forward from an entry point
-python -m graph.code_query_cli --trace "main" --project graphrag --hops 4
-
-# Print the full folder/file hierarchy
-python -m graph.code_query_cli --tree graphrag
-
-# See all ingested projects
-python -m graph.code_query_cli --list-projects
+```
+Agent sees these tools in every session:
+  list_projects  → "what repos are indexed?"
+  blast_radius   → "what files will my change touch?"
+  impact         → "what calls this function / uses this element?"
+  deps           → "what does this file import?"
+  trace          → "what's the forward call chain?"
+  tree           → "show me the project structure"
+  styles         → "what CSS targets this element?"
+  batch_impact   → "union blast radius for a multi-file PR"
 ```
 
-Output is plain text by default (agent-friendly). Add `--rich` for formatted tables.
+Instructions (loaded via `opencode/instructions.md`) mandate: **always query the graph before editing code.**
 
-Each result includes `# index updated: <timestamp>`. If the index is older than 24 hours a `WARNING` is printed automatically.
+### When to use which tool
 
-### When to use which flag
-
-| Scenario | Flag |
+| Scenario | Tool |
 |---|---|
-| About to edit one file or symbol | `--blast-radius` first |
-| Planning a PR touching N files | `--batch-impact file1 file2 ...` |
-| Renaming or removing a function | `--impact FunctionName` |
-| Understanding what a file imports | `--deps path/to/file` |
-| Tracing a call chain forward | `--trace EntryPoint` |
-| Orienting in an unfamiliar project | `--tree <project>` |
-| Finding which CSS components use a design token | `--impact "--tm-token-name"` |
+| About to edit one file or symbol | `blast_radius` first |
+| Planning a PR touching N files | `batch_impact` |
+| Renaming or removing a function | `impact` |
+| Understanding what a file imports | `deps` |
+| Tracing a call chain forward | `trace` |
+| Orienting in an unfamiliar project | `tree` |
+| Finding which CSS uses a design token | `impact "token-name"` |
 
 ---
 
@@ -66,7 +55,7 @@ Each result includes `# index updated: <timestamp>`. If the index is older than 
 
 - Python 3.10+
 - Docker (for Neo4j)
-- Claude Code CLI
+- opencode CLI
 
 ### Start Neo4j
 
@@ -93,7 +82,7 @@ cp .env.example .env
 python main.py ingest-code /path/to/repo --project <name>
 ```
 
-This writes a `## Code graph` section into the project's `CLAUDE.md` automatically, so Claude Code picks up the graph context on the next session.
+This writes a `## Code graph` section into the project's `AGENTS.md` automatically, so opencode picks up the graph context on the next session.
 
 ### Set up session memory (optional)
 
@@ -101,7 +90,173 @@ This writes a `## Code graph` section into the project's `CLAUDE.md` automatical
 cp memory/learnings.example.md memory/learnings.md
 ```
 
-`memory/learnings.md` is gitignored — your notes stay local. Say **"store my session"** to Claude and it will write distilled insights there automatically. The `PreCompact` hook also saves learnings before context is compressed.
+`memory/learnings.md` is gitignored — your notes stay local. opencode's session plugin auto-saves learnings on compaction and idle.
+
+---
+
+## Detailed setup walkthrough
+
+### Step 1 — Clone the repository
+
+```bash
+git clone <repo-url>
+cd graphrag
+```
+
+**Verify:** you are inside the `graphrag` directory and can see `install.sh`, `main.py`, and `POSITIONING.md`.
+
+### Step 2 — Start Neo4j
+
+Pick one:
+
+**Docker (fastest)**
+```bash
+docker run --name neo4j -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/your_password neo4j:latest
+```
+
+**Neo4j Desktop** — Download from [neo4j.com/download](https://neo4j.com/download), create project → Add → Local DBMS, set password, click Start.
+
+**AuraDB (cloud)** — Sign up at [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura), create a free instance, copy the URI/username/password.
+
+**Verify:** Neo4j is reachable at `bolt://localhost:7687`. The Neo4j Browser at `http://localhost:7474` should load (if local).
+
+### Step 3 — Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Fill in:
+```
+ANTHROPIC_API_KEY=your_key_here          # from console.anthropic.com (needed for doc ingestion only)
+NEO4J_URI=bolt://localhost:7687           # use neo4j+s:// for AuraDB
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your_password
+```
+
+**Verify:** `.env` has real values, not placeholders.
+
+### Step 4 — Run the installer
+
+```bash
+./install.sh
+```
+
+This installs Python dependencies, checks Neo4j connectivity, ingests the graphrag codebase into the code graph, and prints confirmation.
+
+**Verify:** script completes without errors and prints `=== Done ===`.
+
+### Step 5 — Register globally with opencode (recommended)
+
+Makes the graph available from any directory via MCP tools + instructions. The installer writes this config to `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["/path/to/graphrag/opencode/instructions.md"],
+  "mcp": {
+    "graphrag": {
+      "type": "local",
+      "command": ["python", "-m", "graph.mcp_server"],
+      "cwd": "/path/to/graphrag"
+    }
+  },
+  "plugin": ["/path/to/graphrag/opencode/plugins/memory.ts"]
+}
+```
+
+Replace `/path/to/graphrag` with the actual path.
+
+**Verify:** `opencode debug config` shows the graphrag MCP server and instructions loaded.
+
+### Step 6 — Open opencode
+
+```bash
+opencode
+```
+
+The graphrag MCP tools (`blast_radius`, `impact`, `deps`, etc.) are available from any working directory. Instructions tell the agent to query the graph before editing.
+
+**Verify:** Ask opencode "what ingested projects are available?" — it should use `list_projects` to answer.
+
+### Step 7 — Add your first knowledge
+
+**Ingest a document (uses Haiku, requires API key)**
+```bash
+python graph/ingest_cli.py --file path/to/paper.pdf
+python graph/ingest_cli.py --url "https://arxiv.org/abs/2105.00188"
+```
+
+**Write facts directly (free, no API cost)**
+```bash
+python graph/remember_batch_cli.py '[
+  {"from": "Concept A", "relation": "CAUSES", "to": "Concept B"},
+  {"from": "System X", "relation": "IMPLEMENTS", "to": "Algorithm Y"}
+]'
+```
+
+**Ingest another codebase**
+```bash
+python main.py ingest-code /path/to/other-repo --project myproject
+```
+
+**Verify:** `python graph/query_cli.py --list-nodes` shows the entities you just added.
+
+### Step 8 — Verify automations work
+
+- **MCP tools:** ask opencode to use `list_projects` or `blast_radius` — tools respond from any directory.
+- **Instructions:** the agent queries the graph before editing files in ingested projects.
+- **Session memory:** compaction auto-saves learnings to `memory/learnings.md`. Check the file after a long session.
+- **Session log:** `memory/session_log.md` gets timestamped entries on session idle events.
+
+---
+
+## Session lifecycle
+
+```
+Open opencode (any directory)
+    ↓
+MCP tools registered (blast_radius, impact, deps, ...) + instructions loaded
+    ↓
+You ask questions / make edits
+    ↓
+Agent queries graph via MCP tools before touching code
+    ↓
+Compaction fires → plugin writes learnings to memory/learnings.md
+    ↓
+Session idle → plugin logs metadata to memory/session_log.md
+```
+
+---
+
+## Common first-session tasks
+
+```
+In opencode, just ask naturally — instructions guide the agent:
+
+"what ingested projects are available?"
+  → agent calls list_projects()
+
+"what would break if I rename write_code_triple?"
+  → agent calls impact("write_code_triple", "graphrag")
+
+"I'm about to edit code_parser.py — what else is affected?"
+  → agent calls blast_radius("ingestion/code_parser.py", "graphrag")
+
+"I'm changing these 3 files — full blast radius?"
+  → agent calls batch_impact("file1, file2, file3", "graphrag")
+
+"show me the graphrag project structure"
+  → agent calls tree("graphrag")
+```
+
+For direct CLI access (bypassing the agent):
+```bash
+python -m graph.code_query_cli --trace "run_agentic_agent" --project graphrag
+python graph/query_cli.py --list-nodes
+python graph/ingest_cli.py --file path/to/paper.pdf
+```
 
 ---
 
@@ -159,14 +314,11 @@ Neo4j                   — typed relationships: [:CALLS], [:IMPORTS],
                           [:INHERITS], [:STYLES], [:DEFINED_IN], [:USES_VAR], …
     │
     ▼
-code_query_cli.py       — traversal queries:
-                          --blast-radius  all files reachable from a target
-                          --batch-impact  union blast radius for N targets
-                          --deps          what a file imports
-                          --impact        what calls/uses a symbol
-                          --trace         forward call chain
-                          --styles        CSS selectors for an element
-                          --tree          folder/file hierarchy
+mcp_server.py           — MCP server exposing 8 tools (blast_radius, impact,
+                          deps, trace, tree, styles, batch_impact, list_projects)
+    │
+    ▼
+opencode agent          — calls MCP tools from any directory via instructions
 ```
 
 Typed relationships (not generic `RELATION {type: ...}`) mean variable-length path queries are index-scannable on Neo4j Community Edition.
@@ -179,9 +331,9 @@ Typed relationships (not generic `RELATION {type: ...}`) mean variable-length pa
 graphrag/
 ├── graph/
 │   ├── code_graph_client.py    Neo4j I/O — nodes, edges, traversal queries
-│   │                           + get_blast_radius() for forward traversal
-│   └── code_query_cli.py       CLI — blast-radius / batch-impact / deps /
-│                                      impact / trace / styles / tree
+│   ├── code_query_cli.py       CLI — blast-radius / batch-impact / deps /
+│   │                                  impact / trace / styles / tree
+│   └── mcp_server.py           MCP server — exposes 8 tools to opencode
 ├── ingestion/
 │   ├── code_parser.py          tree-sitter extraction + Lit css`...` pass
 │   ├── hierarchy_builder.py    Project → Folder → File skeleton
@@ -189,28 +341,46 @@ graphrag/
 │   └── code_normalizer.py      optional Haiku normalization pass
 ├── memory/
 │   ├── decisions.md            architectural decisions (append-only)
-│   └── learnings.md            session learnings ("store my session")
+│   └── learnings.md            session learnings (auto-saved by plugin)
 ├── models/
 │   └── code_types.py           CodeTriple, FileNode, FolderNode
-├── scripts/
-│   ├── session_start.py        SessionStart hook — loads memory/
-│   ├── on_compact.py           PreCompact hook — saves learnings
-│   └── on_file_change.py       PostToolUse hook — syncs code graph
+├── opencode/
+│   ├── config.template.json    opencode config template (MCP + plugin + instructions)
+│   ├── instructions.md         graph-first query rules loaded into every session
+│   ├── plugins/memory.ts       session memory plugin (compaction + idle hooks)
+│   └── scripts/                Python helpers called by the plugin
 ├── config.py                   Neo4j config from .env
 ├── main.py                     CLI: ingest-code / load-triples / watch
-├── CLAUDE.md                   instructions for Claude Code
-├── AGENTS.md                   instructions for other agents
-├── docker-compose.yml          Neo4j container
-└── .claude/settings.json       hook configuration
+├── install.sh                  one-command setup
+└── docker-compose.yml          Neo4j container
 ```
 
 ---
 
-## Automatic CLAUDE.md registration
+## Automatic AGENTS.md registration
 
-Every `ingest-code` run writes a `## Code graph` block into the target project's `CLAUDE.md` (creating the file if it doesn't exist). The block is wrapped in HTML comment markers so re-ingesting safely updates it in place.
+Every `ingest-code` run writes a `## Code graph` block into the target project's `AGENTS.md` (creating the file if it doesn't exist). The block is wrapped in HTML comment markers so re-ingesting safely updates it in place.
 
-This means Claude Code automatically picks up the right `--project` name and query commands the next time a session opens in that directory — no manual setup.
+This means opencode automatically picks up the right `--project` name and query commands the next time a session opens in that directory — no manual setup.
+
+---
+
+## Troubleshooting
+
+**`connection refused` on Neo4j**
+Neo4j is not running. Start your DBMS or run the Docker command from Step 2.
+
+**`authentication failure` on Neo4j**
+Password in `.env` doesn't match. Reset it in Neo4j Desktop or recreate the Docker container.
+
+**`ANTHROPIC_API_KEY` error during ingest**
+The key is missing/invalid. Read-only queries and manual writes don't need it — only document ingestion does.
+
+**MCP tools not appearing**
+Run `opencode debug config` to verify the graphrag MCP server is registered. Restart opencode after config changes.
+
+**`memory/learnings.md` is empty**
+Learnings are saved when compaction fires during long sessions. The plugin writes entries automatically on compaction and idle events.
 
 ---
 
@@ -218,7 +388,7 @@ This means Claude Code automatically picks up the right `--project` name and que
 
 - Structure only — the graph knows what calls what, not what anything *means*
 - Supported languages: Python, JS, TS, TSX, HTML, CSS, SCSS, `.styles.ts` (Lit)
-- External callers (consumers outside the ingested repo) won't appear in `--impact`
+- External callers (consumers outside the ingested repo) won't appear in `impact`
 - Lit CSS extraction covers explicit `var(--foo)` usages and `:host { --foo: ... }` declarations; generated property names from `theme.props()` patterns are not yet indexed
-- If Neo4j is down, the CLI prints startup instructions instead of a traceback
-- If the watcher isn't running and files were edited, the CLI warns automatically with the command to start it
+- If Neo4j is down, the MCP server returns a clear error instead of a traceback
+- The watcher (`python main.py watch`) is separate from the MCP server — keep it running for live re-indexing on file changes

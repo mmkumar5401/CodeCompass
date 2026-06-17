@@ -12,8 +12,8 @@ File/function structure of any ingested codebase.
 
 ## Core value
 
-Eliminates the navigation step: instead of reading 2–3 wrong files to orient, Claude queries the graph and goes directly to the right file.
+Eliminates the navigation step: instead of reading 2–3 wrong files to orient, the agent queries the graph and goes directly to the right file.
 
 ## Key rule
 
-Query the code graph before making any code change. See CLAUDE.md for the query commands.
+Query the code graph before making any code change. See `opencode/instructions.md` for the query commands.
