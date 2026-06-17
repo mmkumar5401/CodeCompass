@@ -20,6 +20,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          check-latest: false
 
       - name: Build package
         run: |
