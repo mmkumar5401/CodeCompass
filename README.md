@@ -1,6 +1,6 @@
 # GraphRAG — Code Intelligence Engine for AI Coding Agents
 
-The fastest structural code index for LLMs. Indexes an average repo in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 10ms — *"what should I read before editing X?"*
+Full-indexes an average repository in seconds, a large monorepo in minutes. Answers structural queries in under 3 seconds — *"what should I read before editing X?"*
 
 Neo4j-backed code dependency graph. Ingest once, then opencode's MCP tools (`blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`) tell the agent exactly which files to read — no blind exploration.
 
