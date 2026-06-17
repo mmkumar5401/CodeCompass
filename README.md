@@ -1,8 +1,8 @@
-# GraphRAG — Code Dependency Index for AI Coding Agents
+# GraphRAG — Code Intelligence Engine for AI Coding Agents
 
-Answers one question: **what should I read before editing X?**
+The fastest structural code index for LLMs. Indexes an average repo in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 10ms — *"what should I read before editing X?"*
 
-It's a Neo4j-backed code dependency index. Ingest a repo once, then ask opencode which files to read before touching anything — without blindly exploring.
+Neo4j-backed code dependency graph. Ingest once, then opencode's MCP tools (`blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`) tell the agent exactly which files to read — no blind exploration.
 
 ---
 
