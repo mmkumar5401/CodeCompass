@@ -13,7 +13,7 @@
 
 import type { Plugin } from "@opencode-ai/plugin"
 
-const GRAPHRAG_ROOT = "/Users/manojkumarmuthukumaran/Documents/Work/graphrag"
+const GRAPHRAG_ROOT = "/Users/manojkumarmuthukumaran/Documents/Work/codecompass"
 const MEMORY_SCRIPT = `${GRAPHRAG_ROOT}/opencode/scripts/save_learnings.py`
 const LOG_SCRIPT = `${GRAPHRAG_ROOT}/opencode/scripts/log_session.py`
 
