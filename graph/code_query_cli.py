@@ -259,7 +259,12 @@ def run_blast_radius(target: str, project: str, max_hops: int = DEFAULT_HOPS, ri
 
 def run_batch_impact(targets: list[str], project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Union of blast radii across multiple targets, annotated with which target caused each file."""
-    input_set = set(targets)
+    # Also split comma-separated targets (supports both --batch-impact a b c and --batch-impact "a, b, c")
+    flat_targets: list[str] = []
+    for t in targets:
+        flat_targets.extend(s.strip() for s in t.split(",") if s.strip())
+
+    input_set = set(flat_targets)
     client = get_client(project)
     try:
         # merged: file -> {hops, via: set[str]}
@@ -268,7 +273,7 @@ def run_batch_impact(targets: list[str], project: str, max_hops: int = DEFAULT_H
         resolved: list[str] = []
         staleness_ts: str | None = None
 
-        for target in targets:
+        for target in flat_targets:
             rows, target_file = client.get_blast_radius(target, project, max_hops)
             if target_file is None:
                 print(f"WARNING: '{target}' not found in project '{project}'")
@@ -300,7 +305,7 @@ def run_batch_impact(targets: list[str], project: str, max_hops: int = DEFAULT_H
 
     deduped = sorted(merged.items(), key=lambda kv: (kv[1]["hops"], kv[0]))
     max_hop_seen = max(v["hops"] for _, v in deduped) if deduped else 0
-    summary = f"# batch impact: {len(deduped)} files, {len(targets)} input targets, {max_hop_seen} hops"
+    summary = f"# batch impact: {len(deduped)} files, {len(flat_targets)} input targets, {max_hop_seen} hops"
 
     stamp = _staleness_line(staleness_ts, rich_mode=rich)
     if rich:

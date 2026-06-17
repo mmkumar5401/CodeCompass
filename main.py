@@ -41,6 +41,7 @@ def ingest_code(repo_path: str, project_name: str, normalize: bool = False, dump
     console.print(f"[dim]Project name:[/] {project_name}")
 
     client = get_client(project_name)
+    client.ensure_indexes()
 
     console.print("[dim]Phase 1/4 — Building hierarchy…[/]")
     file_id_map = build_hierarchy(repo_path, project_name, client)

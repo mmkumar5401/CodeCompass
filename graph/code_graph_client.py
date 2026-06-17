@@ -305,6 +305,28 @@ class CodeGraphClient:
         return rows[0]["last_ingested"] if rows else None
 
     # ------------------------------------------------------------------
+    # Indexes
+    # ------------------------------------------------------------------
+
+    def ensure_indexes(self) -> None:
+        """Create all required Neo4j indexes — idempotent, safe to call every startup.
+
+        Without indexes, every Cypher MATCH scans all nodes linearly (10k+ nodes).
+        With indexes, lookups are O(log n) — removing the #1 source of timeouts.
+        """
+        indexes = [
+            "CREATE INDEX entity_id IF NOT EXISTS FOR (e:Entity) ON (e.id)",
+            "CREATE INDEX entity_project IF NOT EXISTS FOR (e:Entity) ON (e.project)",
+            "CREATE INDEX entity_name_project IF NOT EXISTS FOR (e:Entity) ON (e.name, e.project)",
+            "CREATE INDEX entity_file IF NOT EXISTS FOR (e:Entity) ON (e.file)",
+            "CREATE INDEX file_path_project IF NOT EXISTS FOR (f:File) ON (f.path, f.project)",
+            "CREATE INDEX file_project IF NOT EXISTS FOR (f:File) ON (f.project)",
+            "CREATE INDEX project_name IF NOT EXISTS FOR (p:Project) ON (p.name)",
+        ]
+        for stmt in indexes:
+            self._run(stmt)
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
