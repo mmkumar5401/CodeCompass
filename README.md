@@ -1,4 +1,4 @@
-# CodeCompass — Code Intelligence Engine for AI Coding Agents
+# CodeCompass — Stop guessing which files to read. Know what's connected before you edit.
 
 [![PyPI version](https://img.shields.io/pypi/v/codecompass-mcp)](https://pypi.org/project/codecompass-mcp/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
