@@ -85,12 +85,12 @@ docker compose up -d
 
 **AuraDB (cloud)** — [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura)
 
-### 3. Configure
+### 3. Run setup
+
+Creates `.env`, writes instructions, plugin, and prints the opencode config:
 
 ```bash
-cp .env.example .env
-# Set NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
-# ANTHROPIC_API_KEY is optional — only needed for document ingestion
+codecompass setup
 ```
 
 ### 4. Ingest a codebase
@@ -103,11 +103,7 @@ This writes a `## Code graph` section into the project's `AGENTS.md` automatical
 
 ### 5. Register with opencode
 
-Run the setup wizard — it writes instructions, the memory plugin, helper scripts, and prints the config block:
-
-```bash
-codecompass setup
-```
+Merge the JSON that `codecompass setup` printed into `~/.config/opencode/opencode.json`:
 
 This outputs JSON to merge into `~/.config/opencode/opencode.json`. The resulting config:
 
