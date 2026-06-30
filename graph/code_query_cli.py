@@ -624,9 +624,7 @@ def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
             cls = "fn"
         else:
             cls = "leafFn"
-        step = step_order.get(n["id"])
-        name = n["name"].replace('"', "'")
-        label = f"{step}. {name}" if step else name
+        label = n["name"].replace('"', "'")
         lines.append(f'    {nid}["{label}"]:::{cls}')
     for e in edges:
         f = safe(e["from"])
@@ -647,10 +645,10 @@ def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
 
     return (
         f"# Flow: {start_name}\n\n"
-        "Forward call/import trace from the CodeCompass graph. Node labels are "
-        "numbered in execution order (top to bottom). Arrows carry a unique global "
-        "step number (1, 2, 3 ...) giving the order in which calls happen — follow "
-        "them in sequence to read what runs first, second, third.\n\n"
+        "Forward call/import trace from the CodeCompass graph. Arrows carry a "
+        "unique global step number (1, 2, 3 ...) giving the order in which calls "
+        "happen — follow them in sequence to read what runs first, second, third. "
+        "Nodes are laid out top to bottom in that same execution order.\n\n"
         f"```mermaid\n{mmd}\n```\n"
     )
 
