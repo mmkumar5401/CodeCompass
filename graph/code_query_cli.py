@@ -530,6 +530,36 @@ def _build_flow_json(nodes: list[dict], edges: list[dict], project: str,
     }
 
 
+def _execution_order(nodes: list[dict], edges: list[dict], project: str,
+                     start_name: str) -> dict[str, int]:
+    """DFS from the entry point, following each caller's call order, to assign a
+    global 1-based execution step to every reachable node."""
+    from collections import defaultdict
+    children: dict[str, list[dict]] = defaultdict(list)
+    for e in edges:
+        children[e["from"]].append(e)
+    for group in children.values():
+        group.sort(key=lambda e: (e.get("order") or 0, e.get("line") or 0))
+
+    start_id = f"{project}:{start_name.lower()}"
+    if not any(n["id"] == start_id for n in nodes):
+        start_id = next((n["id"] for n in nodes if n.get("depth") == 0), None)
+
+    order: dict[str, int] = {}
+    counter = 1
+    stack = [start_id] if start_id else []
+    while stack:
+        nid = stack.pop()
+        if nid is None or nid in order:
+            continue
+        order[nid] = counter
+        counter += 1
+        for e in reversed(children.get(nid, [])):
+            if e["to"] not in order:
+                stack.append(e["to"])
+    return order
+
+
 def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
                    start_name: str) -> str:
     """Build a Markdown file with an embedded numbered mermaid flowchart."""
@@ -537,10 +567,12 @@ def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
         base = node_id.split(":", 1)[-1]
         return "n_" + "".join(c if c.isalnum() else "_" for c in base)
 
+    step_order = _execution_order(nodes, edges, project, start_name)
+    nodes_in_order = sorted(nodes, key=lambda n: step_order.get(n["id"], 1_000_000))
+
     lines = ["flowchart TD"]
-    for n in nodes:
+    for n in nodes_in_order:
         nid = safe(n["id"])
-        kind = (n.get("kind") or "").split(":", 1)[0]
         has_children = any(e["from"] == n["id"] for e in edges)
         if n["id"] == f"{project}:{start_name.lower()}":
             cls = "entryNode"
@@ -548,7 +580,9 @@ def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
             cls = "fn"
         else:
             cls = "leafFn"
-        label = n["name"].replace('"', "'")
+        step = step_order.get(n["id"])
+        name = n["name"].replace('"', "'")
+        label = f"{step}. {name}" if step else name
         lines.append(f'    {nid}["{label}"]:::{cls}')
     for e in edges:
         f = safe(e["from"])
@@ -562,7 +596,8 @@ def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
 
     return (
         f"# Flow: {start_name}\n\n"
-        "Forward call/import trace from the CodeCompass graph. Numbers on arrows "
+        "Forward call/import trace from the CodeCompass graph. Node labels are "
+        "numbered in execution order (DFS from the entry point); numbers on arrows "
         "show call order within each function (by source line).\n\n"
         f"```mermaid\n{mmd}\n```\n"
     )
