@@ -427,8 +427,9 @@ def run_flow(start_name: str, repo_path: str, project: str, max_hops: int = DEFA
         print(f"No flow found from '{start_name}' within {max_hops} hops.")
         sys.exit(1)
 
-    # Number edges per-parent by source line so call order is explicit.
-    edges = _order_edges(edges)
+    # Number edges with a single global sequence in execution order (DFS from
+    # the entry point), so each edge has a unique step: 1, then 2, then 3 ...
+    edges = _order_edges(edges, project, start_name)
 
     if fmt == "json":
         payload = _build_flow_json(nodes, edges, project, start_name, repo_path)
@@ -466,19 +467,61 @@ def run_flow(start_name: str, repo_path: str, project: str, max_hops: int = DEFA
             print(f"{indent}{node['name']} ({node['kind']})")
 
 
-def _order_edges(edges: list[dict]) -> list[dict]:
-    """Sort edges per source by line and tag each with its 1-based call order."""
+def _order_edges(edges: list[dict], project: str, start_name: str) -> list[dict]:
+    """Assign each edge a unique global order via DFS from the entry point,
+    visiting each caller's outgoing edges sorted by source line. The result is a
+    strict 1..N sequence (no two edges share a number)."""
     from collections import defaultdict
     by_parent: dict[str, list[dict]] = defaultdict(list)
     for e in edges:
         by_parent[e["from"]].append(e)
-    ordered: list[dict] = []
-    for parent, group in by_parent.items():
+    for group in by_parent.values():
         group.sort(key=lambda e: (e.get("line") or 0))
-        for idx, e in enumerate(group, 1):
-            e = dict(e)
-            e["order"] = idx
-            ordered.append(e)
+
+    start_id = f"{project}:{start_name.lower()}"
+    if start_id not in by_parent and not any(
+        e["to"] == start_id for e in edges
+    ):
+        start_id = edges[0]["from"] if edges else start_id
+
+    ordered: list[dict] = []
+    counter = 1
+    visited_edges: set[int] = set()
+    visited_nodes: set[str] = set()
+    stack = [start_id]
+    while stack:
+        nid = stack.pop()
+        if nid in visited_nodes:
+            continue
+        visited_nodes.add(nid)
+        # Push children in reverse so the lowest-line edge is processed first.
+        for e in reversed(by_parent.get(nid, [])):
+            stack.append(e["to"])
+    # Re-walk in forward order to number edges as execution reaches them.
+    visited_nodes.clear()
+    stack = [start_id]
+    while stack:
+        nid = stack.pop()
+        if nid in visited_nodes:
+            continue
+        visited_nodes.add(nid)
+        for e in by_parent.get(nid, []):
+            if id(e) not in visited_edges:
+                e2 = dict(e)
+                e2["order"] = counter
+                counter += 1
+                ordered.append(e2)
+                visited_edges.add(id(e))
+        for e in reversed(by_parent.get(nid, [])):
+            stack.append(e["to"])
+    # Include any edges not reached by the DFS (defensive), preserving them.
+    seen_pairs = {(e["from"], e["to"], e.get("line")) for e in ordered}
+    for e in edges:
+        if (e["from"], e["to"], e.get("line")) not in seen_pairs:
+            e2 = dict(e)
+            e2["order"] = counter
+            counter += 1
+            ordered.append(e2)
     return ordered
 
 
@@ -522,8 +565,9 @@ def _build_flow_json(nodes: list[dict], edges: list[dict], project: str,
         ],
         "narration_guide": (
             "Each node carries its real signature, docstring, and source snippet. "
-            "Edges are ordered (the 'order' field gives call sequence within each "
-            "caller, by source line). Use signatures + docstrings to describe what "
+            "The 'order' field on each edge is a unique global step number (1, 2, "
+            "3 ...) giving the sequence in which calls happen. Use signatures + "
+            "docstrings to describe what "
             "data enters and leaves each function, and the source snippet to explain "
             "the transformation. Narrate the flow from the entry point downward."
         ),
@@ -604,8 +648,9 @@ def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
     return (
         f"# Flow: {start_name}\n\n"
         "Forward call/import trace from the CodeCompass graph. Node labels are "
-        "numbered in execution order (DFS from the entry point); numbers on arrows "
-        "show call order within each function (by source line).\n\n"
+        "numbered in execution order (top to bottom). Arrows carry a unique global "
+        "step number (1, 2, 3 ...) giving the order in which calls happen — follow "
+        "them in sequence to read what runs first, second, third.\n\n"
         f"```mermaid\n{mmd}\n```\n"
     )
 
