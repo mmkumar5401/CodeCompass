@@ -1,5 +1,5 @@
 [project]
-name = "codecompass"
+name = "codecompass-mcp"
 version = "2.0.0"
 description = "Structural code context for AI coding agents — a local code knowledge graph for blast radius, impact, deps, dead code, and flow tracing"
 readme = "README.md"
