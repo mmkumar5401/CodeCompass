@@ -19,6 +19,28 @@ command, instead of opening a dozen files to follow the thread:
 
 ![Flow trace of ingest_code](docs/flow-example.svg)
 
+The `json` flow format hands each node its real signature, docstring, and source
+snippet, plus the numbered call order. An agent reads that and narrates the
+flow in plain language — for example, the diagram above becomes:
+
+> **How `ingest_code` works** (narrated by an agent from `--flow ... --format json`)
+>
+> 1. **`init_project`** — sets up the `.codecompass/` directory and registers the
+>    project's `AGENTS.md` rules before anything is parsed.
+> 2. **`get_client`** — opens the local NetworkX graph that everything will be
+>    written into.
+> 3. **`build_hierarchy`** — walks the repo and writes the Project → Folder → File
+>    skeleton nodes.
+> 4. **`parse_directory`** — recursively parses every supported file, extracting
+>    functions, classes, imports, and call relationships.
+> 5. **`normalize_triples`** — (optional) runs the Haiku pass to canonicalize
+>    entity names.
+> 6. **`write_code_triples_batch`** — persists all extracted relationships into the
+>    graph, then reports the node count and refreshes `AGENTS.md`.
+>
+> Net effect: a repo goes from raw files to a queryable dependency graph in one
+> pass, with the graph saved locally as JSON.
+
 ---
 
 ## The problem
