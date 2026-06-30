@@ -589,6 +589,13 @@ def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
         t = safe(e["to"])
         if f != t:
             lines.append(f'    {f} -->|{e.get("order", "")}| {t}')
+
+    # Invisible chain in execution-step order forces a strict top-to-bottom
+    # layout (1 above 2 above 3 ...); real call edges remain as cross-links.
+    seq = [safe(n["id"]) for n in nodes_in_order if n["id"] in step_order]
+    for a, b in zip(seq, seq[1:]):
+        lines.append(f"    {a} ~~~ {b}")
+
     lines.append("    classDef entryNode fill:#FFD54F,stroke:#B8860B,stroke-width:3px,color:#000;")
     lines.append("    classDef fn fill:#E3F2FD,stroke:#1976D2,color:#000;")
     lines.append("    classDef leafFn fill:#F3E5F5,stroke:#8E24AA,color:#000;")
