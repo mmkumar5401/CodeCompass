@@ -4,6 +4,23 @@ A local code knowledge graph that gives AI agents (and humans) a map of your cod
 
 ---
 
+## In practice
+
+**Scenario 1 — Safe rename.** An agent is asked to rename `authenticate`. Instead of
+grepping and hoping, it runs `codecompass query --blast-radius src/auth/login.py`
+and instantly sees the three importers, the test file, and a SCSS selector that
+share the name — then edits all of them in one pass, no broken build.
+
+**Scenario 2 — Onboarding onto an unfamiliar pipeline.** A new contributor (human or
+agent) needs to understand how `ingest_code` works. Running
+`codecompass query --flow ingest_code` traces the full forward call graph — which
+parser runs, where the graph gets written, what normalizes the triples — in one
+command, instead of opening a dozen files to follow the thread:
+
+![Flow trace of ingest_code](docs/flow-example.svg)
+
+---
+
 ## The problem
 
 AI coding agents read files one at a time. They don't know that renaming a function in `auth.py` will break three importers, a test file, and a CSS class that shares the name. They guess which files to open, miss dependencies, and introduce bugs.

@@ -65,6 +65,30 @@ This is STATIC analysis: dynamic dispatch, reflection, and string-based
 invocation are invisible. Treat every result as a candidate — grep the name
 across the repo to confirm it is truly unused before deleting it.
 
+### Project notes: `overview.md`, `memory.md`, `learnings.md`
+
+Three files live in `.codecompass/`. **At the START of every session, read all
+three** (then `git log` for recent activity) to get full context. Write to them
+as you learn things worth keeping. They serve DISTINCT purposes — do not mix them
+up:
+
+- **`overview.md`** — what this repo IS. Purpose, tech stack, how to run it, main
+  entry points. The first thing a fresh session should read. Answers "what am I
+  looking at?" Changes rarely.
+
+- **`memory.md`** — how the code is BUILT. Architecture, data flow, module
+  responsibilities, pipeline structure. Answers "how does this project work?"
+  Save a fact here when it describes the steady-state design.
+
+- **`learnings.md`** — what to WATCH OUT for. Non-obvious gotchas, footguns,
+  "looks-X-but-is-actually-Y" patterns, confirmed bugs or dead code, and the
+  reasons behind non-obvious decisions. Answers "what surprised me / what cost me
+  time?" Save a fact here when a future agent would otherwise repeat your mistake.
+
+For "what changed recently", use `git log` — do NOT maintain a changelog in these
+files. Quick test for where a fact goes: orientation → `overview.md`; architecture
+doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
+
 ### When to re-ingest
 
 - After adding, renaming, or deleting source files
