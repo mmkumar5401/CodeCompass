@@ -4,6 +4,18 @@ A local code knowledge graph that gives AI agents (and humans) a map of your cod
 
 ---
 
+## The problem
+
+AI coding agents read files one at a time. They don't know that renaming a function in `auth.py` will break three importers, a test file, and a CSS class that shares the name. They guess which files to open, miss dependencies, and introduce bugs.
+
+## The solution
+
+CodeCompass parses your codebase into a dependency graph — functions, classes, modules, imports, CSS selectors, HTML references — and stores it as a local JSON file. Agents query the graph before editing to see exactly what's connected.
+
+No database. No cloud. One JSON file per repo.
+
+---
+
 ## In practice
 
 **Scenario 1 — Safe rename.** An agent is asked to rename `authenticate`. Instead of
@@ -40,18 +52,6 @@ flow in plain language — for example, the diagram above becomes:
 >
 > Net effect: a repo goes from raw files to a queryable dependency graph in one
 > pass, with the graph saved locally as JSON.
-
----
-
-## The problem
-
-AI coding agents read files one at a time. They don't know that renaming a function in `auth.py` will break three importers, a test file, and a CSS class that shares the name. They guess which files to open, miss dependencies, and introduce bugs.
-
-## The solution
-
-CodeCompass parses your codebase into a dependency graph — functions, classes, modules, imports, CSS selectors, HTML references — and stores it as a local JSON file. Agents query the graph before editing to see exactly what's connected.
-
-No database. No cloud. One JSON file per repo.
 
 ---
 
