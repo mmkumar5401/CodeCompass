@@ -92,9 +92,9 @@ All commands default to the current directory.
 ### Install
 
 ```bash
-# From the codecompass directory
-pip install -e .
+pip install codecompass-mcp
 ```
+
 
 ### Index a project
 
