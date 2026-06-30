@@ -1,10 +1,10 @@
-"""Code-aware traversal CLI for the code knowledge graph.
+"""Code-aware traversal CLI for the local code knowledge graph.
 
-    python -m graph.code_query_cli --impact "login()"
-    python -m graph.code_query_cli --deps src/auth/login.py
-    python -m graph.code_query_cli --styles LoginForm
-    python -m graph.code_query_cli --trace "main()" --hops 4
-    python -m graph.code_query_cli --tree frontend
+    python -m graph.code_query_cli --impact "login()" <repo_path>
+    python -m graph.code_query_cli --deps src/auth/login.py <repo_path>
+    python -m graph.code_query_cli --styles LoginForm <repo_path>
+    python -m graph.code_query_cli --trace "main()" <repo_path>
+    python -m graph.code_query_cli --tree <repo_path>
 
 Output is plain text by default (agent-friendly). Pass --rich for formatted tables.
 """
@@ -12,7 +12,10 @@ Output is plain text by default (agent-friendly). Pass --rich for formatted tabl
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,27 +39,36 @@ STALE_WARN_HOURS = 24
 def main() -> None:
     args = _parse_args()
     rich = args.rich
+    repo_path = os.path.abspath(args.repo_path)
+    project = os.path.basename(repo_path)
 
-    _check_neo4j(args.project)
-    if not args.list_projects:
-        _check_watcher(args.project)
+    if not os.path.exists(os.path.join(repo_path, ".codecompass")):
+        print(f"ERROR: '{repo_path}' has not been initialized.")
+        print(f"  Run: codecompass init {repo_path}")
+        sys.exit(1)
 
-    if args.list_projects:
-        run_list_projects(rich=rich)
+    _check_watcher(project)
+
+    if args.blast_radius:
+        run_blast_radius(args.blast_radius, repo_path, project, max_hops=args.hops, rich=rich)
     elif args.batch_impact:
-        run_batch_impact(args.batch_impact, args.project, max_hops=args.hops, rich=rich)
-    elif args.blast_radius:
-        run_blast_radius(args.blast_radius, args.project, max_hops=args.hops, rich=rich)
+        run_batch_impact(args.batch_impact, repo_path, project, max_hops=args.hops, rich=rich)
     elif args.impact:
-        run_impact(args.impact, args.project, max_hops=args.hops, rich=rich)
+        run_impact(args.impact, repo_path, project, max_hops=args.hops, rich=rich)
     elif args.deps:
-        run_deps(args.deps, args.project, max_hops=args.hops, rich=rich)
+        run_deps(args.deps, repo_path, project, max_hops=args.hops, rich=rich)
     elif args.styles:
-        run_styles(args.styles, args.project, rich=rich)
+        run_styles(args.styles, repo_path, project, rich=rich)
     elif args.trace:
-        run_trace(args.trace, args.project, max_hops=args.hops, rich=rich)
+        run_trace(args.trace, repo_path, project, max_hops=args.hops, rich=rich)
+    elif args.flow:
+        run_flow(args.flow, repo_path, project, max_hops=args.hops, rich=rich,
+                 output=args.flow_output, include_external=args.include_external,
+                 fmt=args.format)
+    elif args.dead_code:
+        run_dead_code(repo_path, project, rich=rich, show_entrypoints=args.include_entrypoints)
     elif args.tree:
-        run_tree(args.tree, rich=rich)
+        run_tree(repo_path, project, rich=rich)
     else:
         print("No query mode specified. Use --help.")
         sys.exit(1)
@@ -66,35 +78,12 @@ def main() -> None:
 # Query modes
 # ---------------------------------------------------------------------------
 
-def run_list_projects(rich: bool = False) -> None:
-    """List all projects currently ingested in the code graph."""
-    client = get_client("default")
-    try:
-        projects = client.get_all_projects()
-    finally:
-        client.close()
-
-    if not projects:
-        print("No projects ingested yet.")
-        print("  Run: codecompass ingest-code <repo_path> --project <name>")
-        return
-
-    if rich:
-        console.print("\n[bold blue]Ingested projects:[/]")
-        for p in projects:
-            console.print(f"  [cyan]{p}[/]")
-    else:
-        print("Ingested projects:")
-        for p in projects:
-            print(f"  {p}")
-
-
-def run_impact(entity_name: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
+def run_impact(entity_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Show what would break if entity_name is changed (reverse CALLS traversal)."""
-    client = get_client(project)
+    client = get_client(repo_path)
     try:
         rows = client.find_callers(entity_name, project, max_hops)
-        updated_at = _file_updated_at_for_entity(client, entity_name, project)
+        updated_at = _entity_updated_at(client, entity_name)
     finally:
         client.close()
 
@@ -119,9 +108,9 @@ def run_impact(entity_name: str, project: str, max_hops: int = DEFAULT_HOPS, ric
             print(f"  {row.get('caller_name','')} ({row.get('caller_type','')}) in {row.get('caller_file','')} [depth {row.get('depth','')}]")
 
 
-def run_deps(file_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
+def run_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Show what a file imports, directly and transitively."""
-    client = get_client(project)
+    client = get_client(repo_path)
     try:
         rows = client.find_dependencies(file_path, project, max_hops)
         updated_at = client.get_file_updated_at(file_path, project)
@@ -149,12 +138,12 @@ def run_deps(file_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: b
             print(f"  {row.get('dependency','')} ({row.get('dep_type','')}) [depth {row.get('depth','')}]")
 
 
-def run_styles(element_name: str, project: str, rich: bool = False) -> None:
+def run_styles(element_name: str, repo_path: str, project: str, rich: bool = False) -> None:
     """Show every CSS selector that styles element_name."""
-    client = get_client(project)
+    client = get_client(repo_path)
     try:
         rows = client.find_styles(element_name, project)
-        updated_at = _file_updated_at_for_entity(client, element_name, project)
+        updated_at = _entity_updated_at(client, element_name)
     finally:
         client.close()
 
@@ -164,7 +153,7 @@ def run_styles(element_name: str, project: str, rich: bool = False) -> None:
 
     stamp = _staleness_line(updated_at, rich_mode=rich)
     if rich:
-        console.print(f"\n[bold blue]CSS rules targeting:[/] {element_name}\n")
+        console.print(f"\n[bold blue]CSS rules targeting:[/] {element_name}")
         if stamp:
             console.print(stamp)
         table = _make_table(title=f"Selectors styling '{element_name}'", columns=["Selector", "Source File", "Line"])
@@ -179,12 +168,12 @@ def run_styles(element_name: str, project: str, rich: bool = False) -> None:
             print(f"  {row.get('selector','')} in {row.get('source_file','')} line {row.get('line','')}")
 
 
-def run_trace(start_name: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
+def run_trace(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Trace the call chain forward from start_name."""
-    client = get_client(project)
+    client = get_client(repo_path)
     try:
         rows = client.trace_calls(start_name, project, max_hops)
-        updated_at = _file_updated_at_for_entity(client, start_name, project)
+        updated_at = _entity_updated_at(client, start_name)
     finally:
         client.close()
 
@@ -194,7 +183,7 @@ def run_trace(start_name: str, project: str, max_hops: int = DEFAULT_HOPS, rich:
 
     stamp = _staleness_line(updated_at, rich_mode=rich)
     if rich:
-        console.print(f"\n[bold blue]Call trace from:[/] {start_name}\n")
+        console.print(f"\n[bold blue]Call trace from:[/] {start_name}")
         if stamp:
             console.print(stamp)
         table = _make_table(title=f"Call chain from '{start_name}'", columns=["Callee", "Type", "File", "Depth"])
@@ -209,9 +198,9 @@ def run_trace(start_name: str, project: str, max_hops: int = DEFAULT_HOPS, rich:
             print(f"  {row.get('callee_name','')} ({row.get('callee_type','')}) in {row.get('callee_file','')} [depth {row.get('depth','')}]")
 
 
-def run_blast_radius(target: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
-    """Show every file reachable from target via CALLS/IMPORTS/INHERITS (forward traversal)."""
-    client = get_client(project)
+def run_blast_radius(target: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
+    """Show every file reachable from target via CALLS/IMPORTS/INHERITS."""
+    client = get_client(repo_path)
     try:
         rows, target_file = client.get_blast_radius(target, project, max_hops)
         updated_at = client.get_file_updated_at(target_file, project) if target_file else None
@@ -222,14 +211,12 @@ def run_blast_radius(target: str, project: str, max_hops: int = DEFAULT_HOPS, ri
         print(f"ERROR: '{target}' not found in project '{project}'")
         sys.exit(1)
 
-    # Deduplicate by file, keeping the minimum-hop row for each.
     seen: dict[str, dict] = {}
     for row in rows:
         f = row["file"]
         if f not in seen or row["hops"] < seen[f]["hops"]:
             seen[f] = row
 
-    # Prepend the target file itself at hop 0.
     if target_file not in seen:
         seen[target_file] = {"file": target_file, "edge_type": "self", "hops": 0}
 
@@ -241,12 +228,9 @@ def run_blast_radius(target: str, project: str, max_hops: int = DEFAULT_HOPS, ri
     if rich:
         if stamp:
             console.print(stamp)
-        table = _make_table(
-            title=f"Blast radius of '{target}'",
-            columns=["File", "Relationship", "Hops"],
-        )
+        table = _make_table(title=f"Blast radius of '{target}'", columns=["File", "Relationship", "Hops"])
         for row in deduped:
-            table.add_row(row["file"], row.get("edge_type", ""), str(row["hops"]))
+            table.add_row(row["file"], row.get("edge_type",""), str(row["hops"]))
         console.print(table)
         console.print(f"[dim]{summary}[/]")
     else:
@@ -257,19 +241,16 @@ def run_blast_radius(target: str, project: str, max_hops: int = DEFAULT_HOPS, ri
         print(summary)
 
 
-def run_batch_impact(targets: list[str], project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
-    """Union of blast radii across multiple targets, annotated with which target caused each file."""
-    # Also split comma-separated targets (supports both --batch-impact a b c and --batch-impact "a, b, c")
+def run_batch_impact(targets: list[str], repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
+    """Union of blast radii across multiple targets."""
     flat_targets: list[str] = []
     for t in targets:
         flat_targets.extend(s.strip() for s in t.split(",") if s.strip())
 
     input_set = set(flat_targets)
-    client = get_client(project)
+    client = get_client(repo_path)
     try:
-        # merged: file -> {hops, via: set[str]}
         merged: dict[str, dict] = {}
-        missing: list[str] = []
         resolved: list[str] = []
         staleness_ts: str | None = None
 
@@ -277,13 +258,11 @@ def run_batch_impact(targets: list[str], project: str, max_hops: int = DEFAULT_H
             rows, target_file = client.get_blast_radius(target, project, max_hops)
             if target_file is None:
                 print(f"WARNING: '{target}' not found in project '{project}'")
-                missing.append(target)
                 continue
             resolved.append(target)
             if staleness_ts is None:
                 staleness_ts = client.get_file_updated_at(target_file, project)
 
-            # Include the target file itself at hop 0
             all_rows = list(rows)
             if not any(r["file"] == target_file for r in all_rows):
                 all_rows.append({"file": target_file, "edge_type": "self", "hops": 0})
@@ -311,29 +290,77 @@ def run_batch_impact(targets: list[str], project: str, max_hops: int = DEFAULT_H
     if rich:
         if stamp:
             console.print(stamp)
-        table = _make_table(
-            title=f"Batch impact ({len(targets)} targets)",
-            columns=["File", "Via", "Hops"],
-        )
+        table = _make_table(title=f"Batch impact ({len(targets)} targets)", columns=["File", "Via", "Hops"])
         for f, meta in deduped:
-            via_str = ", ".join(sorted(meta["via"]))
             flags = " [also in input]" if f in input_set else ""
-            table.add_row(f"{f}{flags}", via_str, str(meta["hops"]))
+            table.add_row(f"{f}{flags}", ", ".join(sorted(meta["via"])), str(meta["hops"]))
         console.print(table)
         console.print(f"[dim]{summary}[/]")
     else:
         if stamp:
             print(stamp)
         for f, meta in deduped:
-            via_str = ", ".join(sorted(meta["via"]))
             flags = "  [also in input]" if f in input_set else ""
-            print(f"{f}  [via: {via_str}]{flags}")
+            print(f"{f}  [via: {', '.join(sorted(meta['via']))}]{flags}")
         print(summary)
 
 
-def run_tree(project: str, rich: bool = False) -> None:
+def run_dead_code(repo_path: str, project: str, rich: bool = False,
+                  show_entrypoints: bool = False) -> None:
+    """Report entities with no inbound caller/importer — candidates for removal."""
+    client = get_client(repo_path)
+    try:
+        result = client.find_dead_code(project)
+    finally:
+        client.close()
+
+    dead = result["dead"]
+    maybe = result["maybe_entrypoint"]
+
+    if not dead and not maybe:
+        print("No dead-code candidates found — every entity has an inbound reference.")
+        return
+
+    def fmt(rows: list[dict]) -> None:
+        by_file: dict[str, list[dict]] = {}
+        for r in rows:
+            by_file.setdefault(r["file"], []).append(r)
+        for f in sorted(by_file):
+            if rich:
+                console.print(f"  [dim]{f}[/]")
+            else:
+                print(f"  {f}")
+            for r in by_file[f]:
+                et = r.get("entity_type", "")
+                if rich:
+                    console.print(f"    [yellow]{r['name']}[/] [dim]({et})[/]")
+                else:
+                    print(f"    {r['name']} ({et})")
+
+    header = "[bold red]Dead-code candidates[/]" if rich else "Dead-code candidates"
+    if rich:
+        console.print(f"\n{header} for {project}\n")
+    else:
+        print(f"\n{header} for {project}\n")
+
+    print(f"Likely dead ({len(dead)}) — no caller or importer found:")
+    fmt(dead)
+
+    if show_entrypoints:
+        print(f"\nPossible entry points ({len(maybe)}) — no static caller, but may be "
+              "invoked via CLI dispatch, a registry, or a framework:")
+        fmt(maybe)
+    else:
+        print(f"\n({len(maybe)} likely entry points hidden — pass --include-entrypoints to show)")
+
+    print("\nNOTE: static analysis only. Dynamic dispatch, reflection, and "
+          "string-based invocation are invisible. VERIFY (grep the name across "
+          "the repo) before removing anything.")
+
+
+def run_tree(repo_path: str, project: str, rich: bool = False) -> None:
     """Print the full project hierarchy as a tree."""
-    client = get_client(project)
+    client = get_client(repo_path)
     try:
         rows = client.get_project_tree(project)
         last_ingested = client.get_project_last_ingested(project)
@@ -372,87 +399,302 @@ def run_tree(project: str, rich: bool = False) -> None:
             print(f"{'  ' * depth}{row.get('node_type','')}: {row.get('name','')}")
 
 
+_FLOW_EXT = {"drawio": ".drawio", "mermaid": ".md", "json": ".json"}
+
+
+def run_flow(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS,
+             rich: bool = False, output: str | None = None,
+             include_external: bool = False, fmt: str = "drawio") -> None:
+    """Generate a flow trace from a forward call/import traversal.
+
+    Formats:
+      drawio  - mxGraph XML for draw.io (default)
+      mermaid - Markdown with an embedded mermaid flowchart
+      json    - structured trace enriched with signatures, docstrings, and
+                source snippets so an agent can narrate the data flow
+    """
+    client = get_client(repo_path)
+    try:
+        data = client.trace_flow(start_name, project, max_hops,
+                                 include_external=include_external)
+    finally:
+        client.close()
+
+    nodes = data["nodes"]
+    edges = data["edges"]
+
+    if not nodes:
+        print(f"No flow found from '{start_name}' within {max_hops} hops.")
+        sys.exit(1)
+
+    # Number edges per-parent by source line so call order is explicit.
+    edges = _order_edges(edges)
+
+    if fmt == "json":
+        payload = _build_flow_json(nodes, edges, project, start_name, repo_path)
+        content = json.dumps(payload, indent=2)
+    elif fmt == "mermaid":
+        content = _build_mermaid(nodes, edges, project, start_name)
+    else:
+        content = _build_drawio(nodes, edges, project, start_name)
+
+    if output is None:
+        safe_name = start_name.replace("/", "_").replace(".", "_").replace(" ", "_")
+        output = os.path.join(repo_path, ".codecompass",
+                              f"flow_{safe_name}{_FLOW_EXT[fmt]}")
+
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with open(output, "w") as f:
+        f.write(content)
+
+    print(f"Flow ({fmt}) written to {output}")
+    print(f"  {len(nodes)} nodes, {len(edges)} edges")
+    if fmt == "drawio":
+        print("  Open in draw.io (desktop or https://app.diagrams.net)")
+    elif fmt == "json":
+        print("  JSON includes signatures, docstrings, and source snippets for narration.")
+
+    if rich:
+        console.print(f"\n[bold blue]Flow from:[/] {start_name}")
+        for node in sorted(nodes, key=lambda n: n["depth"]):
+            indent = "  " * node["depth"]
+            console.print(f"{indent}[cyan]{node['name']}[/] [dim]({node['kind']})[/]")
+    else:
+        print(f"\nFlow from '{start_name}':")
+        for node in sorted(nodes, key=lambda n: n["depth"]):
+            indent = "  " * node["depth"]
+            print(f"{indent}{node['name']} ({node['kind']})")
+
+
+def _order_edges(edges: list[dict]) -> list[dict]:
+    """Sort edges per source by line and tag each with its 1-based call order."""
+    from collections import defaultdict
+    by_parent: dict[str, list[dict]] = defaultdict(list)
+    for e in edges:
+        by_parent[e["from"]].append(e)
+    ordered: list[dict] = []
+    for parent, group in by_parent.items():
+        group.sort(key=lambda e: (e.get("line") or 0))
+        for idx, e in enumerate(group, 1):
+            e = dict(e)
+            e["order"] = idx
+            ordered.append(e)
+    return ordered
+
+
+def _build_flow_json(nodes: list[dict], edges: list[dict], project: str,
+                     start_name: str, repo_path: str) -> dict:
+    """Enrich the flow trace with real code context for agent narration."""
+    from ingestion.source_context import extract_entity_context
+
+    enriched = []
+    for n in sorted(nodes, key=lambda n: n["depth"]):
+        ctx = extract_entity_context(repo_path, n.get("file", ""), n["name"])
+        enriched.append({
+            "id": n["id"],
+            "name": n["name"],
+            "kind": n["kind"],
+            "file": n.get("file", ""),
+            "depth": n["depth"],
+            "signature": ctx["signature"],
+            "docstring": ctx["docstring"],
+            "start_line": ctx["start_line"],
+            "end_line": ctx["end_line"],
+            "source": ctx["snippet"],
+        })
+
+    return {
+        "entry_point": start_name,
+        "project": project,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes": enriched,
+        "edges": [
+            {
+                "from": e["from"],
+                "to": e["to"],
+                "type": e["type"],
+                "order": e.get("order"),
+                "call_site_file": e.get("file", ""),
+                "call_site_line": e.get("line"),
+            }
+            for e in edges
+        ],
+        "narration_guide": (
+            "Each node carries its real signature, docstring, and source snippet. "
+            "Edges are ordered (the 'order' field gives call sequence within each "
+            "caller, by source line). Use signatures + docstrings to describe what "
+            "data enters and leaves each function, and the source snippet to explain "
+            "the transformation. Narrate the flow from the entry point downward."
+        ),
+    }
+
+
+def _build_mermaid(nodes: list[dict], edges: list[dict], project: str,
+                   start_name: str) -> str:
+    """Build a Markdown file with an embedded numbered mermaid flowchart."""
+    def safe(node_id: str) -> str:
+        base = node_id.split(":", 1)[-1]
+        return "n_" + "".join(c if c.isalnum() else "_" for c in base)
+
+    lines = ["flowchart TD"]
+    for n in nodes:
+        nid = safe(n["id"])
+        kind = (n.get("kind") or "").split(":", 1)[0]
+        has_children = any(e["from"] == n["id"] for e in edges)
+        if n["id"] == f"{project}:{start_name.lower()}":
+            cls = "entryNode"
+        elif has_children:
+            cls = "fn"
+        else:
+            cls = "leafFn"
+        label = n["name"].replace('"', "'")
+        lines.append(f'    {nid}["{label}"]:::{cls}')
+    for e in edges:
+        f = safe(e["from"])
+        t = safe(e["to"])
+        if f != t:
+            lines.append(f'    {f} -->|{e.get("order", "")}| {t}')
+    lines.append("    classDef entryNode fill:#FFD54F,stroke:#B8860B,stroke-width:3px,color:#000;")
+    lines.append("    classDef fn fill:#E3F2FD,stroke:#1976D2,color:#000;")
+    lines.append("    classDef leafFn fill:#F3E5F5,stroke:#8E24AA,color:#000;")
+    mmd = "\n".join(lines)
+
+    return (
+        f"# Flow: {start_name}\n\n"
+        "Forward call/import trace from the CodeCompass graph. Numbers on arrows "
+        "show call order within each function (by source line).\n\n"
+        f"```mermaid\n{mmd}\n```\n"
+    )
+
+
+_EDGE_COLORS = {
+    "CALLS": "#2196F3",
+    "IMPORTS": "#4CAF50",
+    "INHERITS": "#FF9800",
+    "DEFINED_IN": "#9C27B0",
+    "REFERENCES": "#607D8B",
+}
+
+_KIND_FILL = {
+    "function": "#E3F2FD",
+    "class": "#FFF3E0",
+    "module": "#E8F5E9",
+    "endpoint": "#FCE4EC",
+    "variable": "#F3E5F5",
+}
+
+
+def _build_drawio(nodes: list[dict], edges: list[dict], project: str, start_name: str) -> str:
+    """Build mxGraph XML for draw.io from flow nodes and edges."""
+    node_ids = {n["id"]: i + 2 for i, n in enumerate(nodes)}  # 0=root, 1=parent
+
+    # Layout: arrange nodes by depth, spread horizontally
+    depth_groups: dict[int, list[dict]] = {}
+    for n in nodes:
+        depth_groups.setdefault(n["depth"], []).append(n)
+
+    positions: dict[str, tuple[int, int]] = {}
+    y_offset = 40
+    for depth in sorted(depth_groups):
+        group = depth_groups[depth]
+        x_start = 40
+        for i, n in enumerate(group):
+            positions[n["id"]] = (x_start + i * 260, y_offset + depth * 140)
+
+    root = ET.Element("mxfile", host="app.diagrams.net", type="device")
+    diagram = ET.SubElement(root, "diagram", name=f"Flow: {start_name}", id="flow")
+    model = ET.SubElement(diagram, "mxGraphModel", dx="1200", dy="800",
+                          grid="1", gridSize="10", guides="1", tooltips="1",
+                          connect="1", arrows="1", fold="1", page="1",
+                          pageScale="1", pageWidth="1600", pageHeight="1200")
+    mx_root = ET.SubElement(model, "root")
+    ET.SubElement(mx_root, "mxCell", id="0")
+    ET.SubElement(mx_root, "mxCell", id="1", parent="0")
+
+    for n in nodes:
+        cell_id = str(node_ids[n["id"]])
+        entity_type = n["kind"].split(":")[0] if ":" in n["kind"] else ""
+        fill = _KIND_FILL.get(entity_type, "#FFFFFF")
+        is_start = n["depth"] == 0
+        border = "strokeWidth=3;" if is_start else ""
+        label = f"{n['name']}\n{n['kind']}"
+        x, y = positions.get(n["id"], (40, 40))
+
+        style = (f"rounded=1;whiteSpace=wrap;html=1;fillColor={fill};"
+                 f"strokeColor=#666666;{border}fontSize=12;")
+
+        cell = ET.SubElement(mx_root, "mxCell", id=cell_id, value=label,
+                             style=style, vertex="1", parent="1")
+        ET.SubElement(cell, "mxGeometry", x=str(x), y=str(y),
+                      width="220", height="60", **{"as": "geometry"})
+
+    edge_id = len(nodes) + 2
+    for e in edges:
+        src = node_ids.get(e["from"])
+        tgt = node_ids.get(e["to"])
+        if src is None or tgt is None:
+            continue
+        color = _EDGE_COLORS.get(e["type"], "#333333")
+        style = (f"edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;"
+                 f"jettySize=auto;html=1;strokeColor={color};strokeWidth=2;"
+                 f"fontSize=11;")
+        ET.SubElement(mx_root, "mxCell", id=str(edge_id), value=e["type"],
+                      style=style, edge="1", parent="1",
+                      source=str(src), target=str(tgt))
+        edge_id += 1
+
+    return ET.tostring(root, encoding="unicode", xml_declaration=True)
+
+
 # ---------------------------------------------------------------------------
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
-def _check_neo4j(project: str) -> None:
-    """Fail fast with a helpful message if Neo4j is unreachable or auth fails."""
-    client = get_client(project)
-    try:
-        client._run_read("RETURN 1")
-        client.close()
-    except Exception as e:
-        client.close()
-        msg = str(e)
-        ename = type(e).__name__
-        if any(k in ename or k in msg for k in ("ServiceUnavailable", "ConnectionRefused", "refused", "timed out")):
-            print("ERROR: Cannot connect to Neo4j at bolt://localhost:7687")
-            print("  Start it:  docker compose up -d   (from codecompass/)")
-            print("  Then wait ~5s and retry.")
-        elif any(k in ename or k in msg for k in ("AuthError", "Unauthorized", "authentication")):
-            print("ERROR: Neo4j authentication failed.")
-            print("  Check NEO4J_USER and NEO4J_PASSWORD in your .env file.")
-        else:
-            print(f"ERROR: Neo4j connection failed — {ename}: {msg}")
-        sys.exit(1)
-
-
 def _check_watcher(project: str) -> None:
     """Warn (but don't exit) if no watcher process is running for this project."""
-    import os
     pid_file = pid_file_path(project)
     if not os.path.exists(pid_file):
-        print(f"WARNING: Watcher is not running for project '{project}'.")
-        print(f"  Files edited outside this session won't be re-indexed automatically.")
-        print(f"  Start it:  codecompass watch <repo_path> --project {project}")
-        return
+        return  # Watcher is optional — silently skip
     try:
         with open(pid_file) as f:
             pid = int(f.read().strip())
-        os.kill(pid, 0)  # signal 0 checks if the process is alive without killing it
+        os.kill(pid, 0)
     except (ProcessLookupError, ValueError, OSError):
         try:
             os.unlink(pid_file)
         except OSError:
             pass
-        print(f"WARNING: Watcher for project '{project}' is no longer running (stale PID file removed).")
-        print(f"  Start it:  codecompass watch <repo_path> --project {project}")
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _entity_updated_at(client, entity_name: str) -> str | None:
+    """Look up the updated_at of the file containing an entity."""
+    for n, attr in client.graph.nodes(data=True):
+        if attr.get("type") == "Entity" and attr.get("name") == entity_name:
+            file_path = attr.get("file")
+            if file_path:
+                for fn, fattr in client.graph.nodes(data=True):
+                    if fattr.get("type") == "File" and fattr.get("path") == file_path:
+                        return fattr.get("updated_at")
+    return None
+
+
 def _staleness_line(timestamp: str | None, rich_mode: bool = False) -> str | None:
-    """Return a staleness header line, with a warning if the index is older than STALE_WARN_HOURS."""
     if not timestamp:
         return None
     try:
         ts = datetime.fromisoformat(timestamp)
         age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-        if age_h > STALE_WARN_HOURS:
-            warn = f"  WARNING: {age_h:.0f}h old — re-run: codecompass ingest-code . --project <name>"
-            if rich_mode:
-                return f"[yellow]# index updated: {timestamp}{warn}[/]"
-            return f"# index updated: {timestamp}{warn}"
+        warn = f"  WARNING: {age_h:.0f}h old — re-run: codecompass ingest-code <repo_path>" if age_h > STALE_WARN_HOURS else ""
         if rich_mode:
-            return f"[dim]# index updated: {timestamp}[/]"
-        return f"# index updated: {timestamp}"
+            return f"[{'yellow' if warn else 'dim'}]# index updated: {timestamp}{warn}[/]"
+        return f"# index updated: {timestamp}{warn}"
     except (ValueError, TypeError):
         return f"# index updated: {timestamp}"
-
-
-def _file_updated_at_for_entity(client, entity_name: str, project: str) -> str | None:
-    """Look up the updated_at timestamp of the file containing entity_name."""
-    rows = client._run_read("""
-        MATCH (e:Entity {project: $project})
-        WHERE e.name = $name
-        MATCH (f:File {path: e.file, project: $project})
-        RETURN f.updated_at AS updated_at
-        LIMIT 1
-    """, project=project, name=entity_name)
-    return rows[0]["updated_at"] if rows else None
 
 
 def _make_table(title: str, columns: list[str]) -> Table:
@@ -475,28 +717,30 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--project", default="default",
-                        help="Project name to query (default: 'default')")
-    parser.add_argument("--hops", type=int, default=DEFAULT_HOPS,
-                        help=f"Max traversal depth (default: {DEFAULT_HOPS})")
-    parser.add_argument("--batch-impact", metavar="TARGET", nargs="+",
-                        help="Union of blast radii across multiple targets (file paths or symbol names)")
-    parser.add_argument("--blast-radius", metavar="TARGET",
-                        help="All files reachable from TARGET via CALLS/IMPORTS/INHERITS (symbol or file path)")
-    parser.add_argument("--impact", metavar="ENTITY",
-                        help="What calls ENTITY? (reverse CALLS traversal)")
-    parser.add_argument("--deps", metavar="FILE",
-                        help="What does FILE import? (forward IMPORTS traversal)")
-    parser.add_argument("--styles", metavar="ELEMENT",
-                        help="What CSS selectors style ELEMENT?")
-    parser.add_argument("--trace", metavar="ENTITY",
-                        help="Trace forward call chain from ENTITY")
-    parser.add_argument("--tree", metavar="PROJECT",
-                        help="Print full folder/file hierarchy for PROJECT")
-    parser.add_argument("--rich", action="store_true",
-                        help="Rich formatted output with tables and colour (default: plain text)")
-    parser.add_argument("--list-projects", action="store_true",
-                        help="List all ingested projects")
+    parser.add_argument("repo_path", nargs="?", default=".",
+                        help="Path to the repository (default: current directory)")
+    parser.add_argument("--hops", type=int, default=DEFAULT_HOPS)
+    parser.add_argument("--blast-radius", metavar="TARGET")
+    parser.add_argument("--batch-impact", metavar="TARGET", nargs="+")
+    parser.add_argument("--impact", metavar="ENTITY")
+    parser.add_argument("--deps", metavar="FILE")
+    parser.add_argument("--styles", metavar="ELEMENT")
+    parser.add_argument("--trace", metavar="ENTITY")
+    parser.add_argument("--flow", metavar="ENTITY")
+    parser.add_argument("--flow-output", metavar="PATH", default=None)
+    parser.add_argument("--include-external", action="store_true",
+                        help="Include external/stdlib symbols in --flow output")
+    parser.add_argument("--format", choices=("drawio", "mermaid", "json"),
+                        default="drawio",
+                        help="Output format for --flow (default: drawio). "
+                             "json includes signatures, docstrings, and source "
+                             "snippets for agent narration.")
+    parser.add_argument("--dead-code", action="store_true",
+                        help="Find entities with no inbound caller/importer (candidates to remove)")
+    parser.add_argument("--include-entrypoints", action="store_true",
+                        help="Also list likely entry points (run_*, handlers, tests) in --dead-code")
+    parser.add_argument("--tree", action="store_true")
+    parser.add_argument("--rich", action="store_true")
     return parser.parse_args()
 
 

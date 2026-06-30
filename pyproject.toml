@@ -1,12 +1,12 @@
 [project]
-name = "codecompass-mcp"
+name = "codecompass"
 version = "2.0.0"
-description = "Structural code context for AI coding agents — MCP tools for blast radius, impact, deps, and more"
+description = "Structural code context for AI coding agents — a local code knowledge graph for blast radius, impact, deps, dead code, and flow tracing"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [{name = "CodeCompass contributors"}]
-keywords = ["ai", "code-graph", "mcp", "llm", "coding-agent", "neo4j", "tree-sitter"]
+keywords = ["ai", "code-graph", "llm", "coding-agent", "tree-sitter"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -21,7 +21,7 @@ classifiers = [
 
 dependencies = [
     "anthropic>=0.40.0",
-    "neo4j>=5.18.0",
+    "networkx>=3.0",
     "pypdf2>=3.0.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
@@ -33,7 +33,6 @@ dependencies = [
     "tree-sitter-html>=0.21.0",
     "tree-sitter-css>=0.21.0",
     "watchdog>=4.0.0",
-    "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -43,7 +42,6 @@ dev = [
 ]
 
 [project.scripts]
-codecompass-mcp = "graph.mcp_server:main"
 codecompass = "graph.cli:main"
 
 [build-system]

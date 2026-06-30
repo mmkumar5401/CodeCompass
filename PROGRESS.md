@@ -2,143 +2,110 @@
 
 ## Goal
 
-Build a **memory layer for LLMs** — a persistent, structured knowledge store that any model can read from and write to across sessions. The graph captures entities and relationships extracted from documents; the agentic query layer lets a model traverse and reason over that memory on demand.
+Build a **structural code context layer for AI coding agents** — a persistent, local knowledge graph that an agent can traverse to understand what's connected before making any change.
+
+---
+
+## What We Built (v2.1 — Local Graph)
+
+### Local Graph Engine (`graph/local_graph_client.py`) ✅
+Replaced Neo4j with NetworkX + JSON persistence:
+- `LocalGraphClient` reads/writes `.codecompass/graph.json` using `nx.node_link_data` / `nx.node_link_graph`
+- Typed relationship edges: `CALLS`, `IMPORTS`, `INHERITS`, `DEFINED_IN`, `HAS_CLASS`, `POSTS_TO`, `INCLUDES`, `STYLES`, `USED_BY`, `USES_VAR`, `REFERENCES`
+- Corrupted `graph.json` is caught on load and regenerated from scratch
+- `get_client()` factory in `code_graph_client.py` returns `LocalGraphClient` — callers unchanged
+
+### `codecompass init` command ✅
+- Creates `.codecompass/` with stub files: `graph.json`, `memory.md`, `learnings.md`
+- Safe to re-run — skips existing files
+- `ingest-code` runs it automatically if `.codecompass` is missing
+
+### Simplified CLI ✅
+- No `--project` flag — project name inferred from directory basename
+- Commands: `init`, `ingest-code`, `load-triples`, `watch`, `setup`
+
+### Setup Wizard (`graph/setup.py`) ✅
+- `codecompass setup` writes all opencode config files to `~/.config/opencode/codecompass/`
+- Prints the JSON block to merge into `opencode.json`
 
 ---
 
 ## What We Built (v2.0 — opencode Integration)
 
-### MCP Server (`graph/mcp_server.py`) ✅
-Exposes the code graph as 8 native MCP tools available from any working directory:
-- `list_projects`, `blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`
-- Uses existing `CodeGraphClient` — same Neo4j queries, zero code duplication
+### Query CLI (`graph/code_query_cli.py`) ✅
+Exposes all graph traversals as bash commands the agent runs directly:
+- `--blast-radius`, `--impact`, `--deps`, `--trace`, `--tree`, `--styles`, `--batch-impact`
 - Returns plain text with stale-index warnings
-
-### opencode Plugin (`opencode/plugins/memory.ts`) ✅
-Replaces old Claude Code hooks with opencode-native equivalents:
-- `session.compacting` — injects learnings context into compaction prompt
-- `session.compacted` — writes learnings placeholder to `memory/learnings.md`
-- `session.idle` — logs session metadata to `memory/session_log.md`
-- Helper scripts at `opencode/scripts/log_session.py` and `save_learnings.py`
 
 ### Instructions (`opencode/instructions.md`) ✅
 Loaded into every opencode session via `instructions` config:
 - Mandates graph-first behavior: always query before editing
-- Maps scenarios to tools (blast_radius first, impact for renames, etc.)
-- Reference table for all 8 MCP tools
-
-### One-Command Setup (`install.sh`) ✅
-Updated to auto-configure opencode:
-- Installs MCP SDK alongside existing deps
-- Writes `~/.config/opencode/opencode.json` with MCP + instructions + plugin paths
-- Updates plugin with real filesystem paths
-- Safe merge — writes to `.codecompass.json` first, user copies to activate
+- Maps scenarios to tools
 
 ### AGENTS.md Auto-Registration ✅
-`ingest-code` now writes to `AGENTS.md` (opencode convention) instead of `CLAUDE.md`.
+`ingest-code` writes a `## Code graph` block into the target project's `AGENTS.md`.
 
 ---
 
-## What We Built (v1.x)
+## What We Built (v1.x — Agentic Memory / Document Graph)
 
 ### Ingestion Pipeline
-- **PDF/text → chunks → triples → Neo4j**
-- PyPDF2 extracts full text; sliding window chunker splits into 800-char chunks with 100-char overlap
-- Each chunk sent to **Claude Haiku** for entity + relationship extraction (JSON)
-- 5 chunks processed concurrently via `asyncio.Semaphore`
-- Triples written to Neo4j with `MERGE` (idempotent — safe to re-run)
-- Entity IDs are deterministic (`uuid5(name.lower())`) so the same entity across chunks gets the same node
+- PDF/text → chunks → triples → graph
+- PyPDF2 + sliding-window chunker (800-char / 100-char overlap)
+- Claude Haiku for entity + relationship extraction (5 concurrent chunks)
+- Triples written with MERGE (idempotent), deterministic entity IDs via `uuid5`
 
 ### Three Query Modes
+| Mode | How it works |
+|---|---|
+| Traversal | BFS with Haiku scoring per frontier layer |
+| Full graph | Entire graph sent to Sonnet in one cached call |
+| **Agentic** | Haiku drives tool-use traversal, Sonnet synthesizes |
 
-| Mode | Command | How it works |
-|---|---|---|
-| Traversal | `python main.py query "..."` | BFS with Haiku scoring per frontier layer |
-| Full graph | `python main.py query --full-graph "..."` | Entire graph sent to Sonnet in one cached call |
-| **Agentic** | `python main.py query --agentic "..."` | Haiku drives tool-use traversal, Sonnet synthesizes |
-
-### Agentic Mode (the good one)
-
-**Seed finding**
-- Fetches all node names from Neo4j
-- Shows them to Haiku alongside the query — picks from real graph vocabulary, no hallucinated entity names
-
-**Traversal loop (Haiku)**
-- Tool: `get_neighbours(node_names: list)` — batches 3–5 nodes per call
-- One Neo4j query per tool call handles all nodes in the batch
-- Visited set prevents re-exploration
-- Confirmation gate: when Haiku wants to stop, it's shown unexplored candidate nodes and asked to confirm — fires until Haiku is genuinely done
-
-**Three-tool memory loop**
-- `get_neighbours` — read existing memory (batched, 3–5 nodes per call)
-- `remember` — write a new inferred fact back to the graph, tagged with session_id
-- `ingest_source` — pull in a URL or raw text mid-session, chunk + extract + write to graph, then continue exploring the new nodes immediately — closes the read/write/ingest loop
-
-**Answer synthesis (Sonnet + extended thinking)**
-- All collected edges sent to Sonnet in a single call
-- Extended thinking enabled (`budget_tokens: 5000`) via `betas=["interleaved-thinking-2025-05-14"]`
-- Thinking and answer both streamed to terminal as tokens arrive
-- No hard cap on traversal — Haiku explores until it is genuinely done
-
-**Performance after optimisations**
-- Before batching: ~17 sequential Haiku turns → ~50s traversal
-- After batching: ~7 batch turns → ~14s traversal
-
-### Output
-- Live status: `[3] exploring: Ripple Propagation, Slot 0, Ripple Matrix`
-- Traversal table showing every node explored
-- Streamed answer grounded in actual graph relationships (`X UPDATES Y`, `X DECOUPLED_FROM Y`)
+### Agentic Mode
+- Seed finding via all node names shown to Haiku
+- Batched `get_neighbours(node_names)` — 3–5 nodes per call, one graph lookup
+- Write-back: `remember(from, rel, to)` commits new facts mid-session
+- `ingest_source` pulls in a URL mid-session, chunks + extracts + continues exploring
+- Synthesis via Sonnet with extended thinking (`budget_tokens: 5000`)
+- Before batching: ~17 turns / ~50s. After: ~7 turns / ~14s
 
 ---
 
 ## What We Can Do Next
 
-Everything below is ordered by how directly it advances the **LLM memory** goal.
+Ordered by how directly it advances the core JTBD (make complete, confident changes).
 
-### Core memory capabilities
+### High priority
 
-**1. Write-back from model** ✅
-`remember(from_entity, relation_type, to_entity)` tool added alongside `get_neighbours`. Haiku can commit new facts mid-session. Facts are written to Neo4j immediately, tagged with `session_id` and `source: agent`.
+**1. Git diff integration** — `blast_radius` over `git diff --name-only HEAD` output. Agent gets the full impact of staged changes before committing. Direct JTBD fit.
 
-**2. Session-scoped memory** ✅
-Every relationship in Neo4j now carries `session_id` and `created_at`. Ingested facts are tagged `session_id: "ingestion"`; agent-written facts carry the UUID of the run that created them. Foundation for recency weighting, per-user namespacing, and selective forgetting.
+**2. Language expansion** — Go, Java, Rust parsers. Opens the tool to backend-heavy teams. Each language is ~30 RICE.
 
-**3. Entity resolution / deduplication** ✅
-`python main.py resolve` runs a post-ingestion Haiku pass over all node names, clusters duplicates, and merges them — re-pointing all relationships to the canonical node and deleting duplicates. `--dry-run` flag shows what would be merged without touching the graph.
+**3. Performance benchmark** — Validate the < 500ms 3-hop traversal target for 5,000-node graphs. Establish a regression test so graph growth doesn't silently slow queries.
 
-**4. Multi-document ingestion**
-The graph's advantage over plain RAG is cross-document entity linking. Ingesting 10–20 documents from different sources lets the model draw connections none of the source documents make explicitly — the graph becomes more valuable than any single document.
+### Medium priority
 
-### Quality & reliability
+**4. Ingestion quality validation** — Sample N triples post-ingest and ask Sonnet to verify against source chunks. Flag bad extractions.
 
-**5. Ingestion quality validation**
-Haiku extraction is lossy and silent about it. After ingestion, sample N triples and ask Sonnet to verify them against the source chunk. Flag and optionally re-extract bad triples.
+**5. Incremental ingestion** — Track processed chunks by hash. Skip re-extraction on re-ingest of unchanged files.
 
-**6. Incremental ingestion**
-Re-ingesting a document currently re-extracts everything. Track processed chunks by hash and skip them on subsequent runs — makes ingestion safe to re-run as new documents arrive.
+**6. Graph visualisation** — Export traversal path as JSON and render in a browser (D3 or similar). Shows which nodes the agent used to reach its answer.
 
-**7. Better seed ranking**
-The seed finder returns up to 5 nodes with no ranking. Ask Haiku to rank candidates by relevance. Top 3 ranked seeds > 5 unranked seeds.
+### Blocked (insufficient evidence or cost)
 
-### Performance
+- VS Code extension — no evidence agents need a GUI
+- Cross-repo graph — XL effort, no confirmed demand
+- Team / cloud sync — XL effort, no confirmed demand
+- Natural language query — assumption-dependent, validate first
 
-**8. Prompt caching on the Sonnet synthesis call**
-The edge list sent to Sonnet is identical across queries until re-ingestion. Adding `cache_control: ephemeral` to that block cuts synthesis cost ~10× after the first query.
+---
 
-**9. Subgraph result caching**
-Cache edges returned for frequently-explored nodes. If the same node appears in 10 queries, the Neo4j call is redundant after the first.
+## Acceptance Criteria (local graph migration — in progress)
 
-### Interfaces
-
-**10. REST API / web UI**
-Wrap `run_agentic_agent` in a FastAPI endpoint. Stream the answer over SSE. Required for any integration beyond the terminal (chat UI, IDE plugin, etc.).
-
-**11. MCP server for code graph** ✅
-Code graph queries exposed as native MCP tools (blast_radius, impact, deps, etc.). Available from any working directory. Config auto-generated by install.sh.
-
-**12. Graph visualisation**
-Export the traversal path as a Cypher subgraph and render it in Neo4j Browser or D3. Shows which memory nodes the model used to reach its answer.
-
-**13. Publish as reusable MCP package** ✅
-Packaged as `codecompass-mcp` on PyPI. `pip install codecompass-mcp` gives `codecompass` and `codecompass-mcp` commands.
-    Docker images available at `ghcr.io/<owner>/codecompass` as an alternative for containerized deployments.
+- [x] `codecompass init <repo_path>` creates `.codecompass/` with `graph.json`, `memory.md`, `learnings.md`
+- [x] All Neo4j dependencies removed; replaced with `networkx` + JSON
+- [x] `ingest-code` auto-detects `.codecompass` and updates `graph.json` without `--project`
+- [ ] All traversal features (`--impact`, `--deps`, `--tree`, etc.) verified via `code_query_cli.py` on local graph
+- [ ] 3-hop traversal < 500ms for 5,000-node graph
+- [ ] Full test suite passing (end-to-end, empty repo, corrupted graph, cross-project isolation, scale)

@@ -1,52 +1,62 @@
-# CodeCompass — opencode Instructions
+# CodeCompass — Agent Instructions
 
-A Neo4j-backed code dependency graph is available via MCP tools. **Always query it before editing code.** The graph knows what's connected — trust it over file exploration.
-
----
-
-## Available tools (MCP)
-
-All tools use the `codecompass` MCP server. Call them from any working directory.
-
-| Tool | Purpose |
-|---|---|
-| `list_projects` | See all ingested projects |
-| `blast_radius` | Every file a symbol/file touches (forward) |
-| `impact` | What calls/uses a symbol (reverse) |
-| `deps` | What a file imports |
-| `trace` | Forward call chain from a function |
-| `tree` | Folder/file hierarchy |
-| `styles` | CSS selectors for an element |
-| `batch_impact` | Union blast radius across N targets |
+A local code dependency graph lives in `.codecompass/graph.json` at the root of this repository. **Always query it before editing code.** The graph knows what's connected — trust it over file exploration.
 
 ---
 
-## When to use each tool
+## How to query the graph
 
-| Scenario | Tool to call first |
+Run queries with the CLI using your `bash` tool:
+
+```bash
+# What files are affected if I change this file or symbol?
+python -m graph.code_query_cli --blast-radius <file_or_symbol> <repo_path>
+
+# What calls or uses a function/class? (before renaming or removing)
+python -m graph.code_query_cli --impact <symbol> <repo_path>
+
+# What does a file import, directly and transitively?
+python -m graph.code_query_cli --deps <file_path> <repo_path>
+
+# Forward call chain from a function
+python -m graph.code_query_cli --trace <function_name> <repo_path>
+
+# Full project structure
+python -m graph.code_query_cli --tree <repo_path>
+
+# CSS selectors that target an element
+python -m graph.code_query_cli --styles <element_name> <repo_path>
+
+# Union blast radius across multiple files (planning a multi-file PR)
+python -m graph.code_query_cli --batch-impact <file1> <file2> <repo_path>
+```
+
+---
+
+## When to use each query
+
+| Scenario | Command |
 |---|---|
-| About to edit one file or symbol | `blast_radius(symbol, project)` |
-| Planning a PR touching N files | `batch_impact("file1, file2", project)` |
-| Renaming or removing a function | `impact(function_name, project)` |
-| Understanding what a file imports | `deps(file_path, project)` |
-| Tracing a call chain forward | `trace(entry_point, project)` |
-| Orienting in an unfamiliar project | `tree(project)` |
-| Finding which CSS targets an element | `styles(element_name, project)` |
-| Discovering ingested projects | `list_projects()` |
+| About to edit one file or symbol | `--blast-radius` first |
+| Planning a PR touching N files | `--batch-impact` |
+| Renaming or removing a function | `--impact` |
+| Understanding what a file imports | `--deps` |
+| Tracing a call chain forward | `--trace` |
+| Orienting in an unfamiliar project | `--tree` |
+| Finding which CSS targets an element | `--styles` |
 
 ---
 
 ## Mandatory rules
 
-1. **Before editing any file in an ingested project, call the codecompass tools first.**
-2. Use `list_projects()` to discover what projects are available.
-3. Use `blast_radius` to understand impact before making changes.
-4. Use `impact` before renaming or removing anything.
-5. If a tool returns a WARNING about stale index, suggest re-running `codecompass ingest-code`.
-6. The graph provides **structural truth** (AST-parsed). Trust it. It cannot tell you what code *means* — only what's connected.
+1. **Before editing any file in this project, run a graph query first.**
+2. Use `--blast-radius` to understand what else you'll affect.
+3. Use `--impact` before renaming or removing anything.
+4. If the output includes a `WARNING: Nh old`, the index is stale — suggest re-running `codecompass ingest-code <repo_path>`.
+5. The graph reflects **structural truth** from the AST. It tells you what's connected, not what code means.
 
 ---
 
 ## Project memory
 
-Session learnings are stored in `memory/learnings.md`. Design decisions are in `memory/decisions.md`. These accumulate across sessions — read them at session start if relevant to your task.
+Session learnings are stored in `.codecompass/learnings.md`. Architectural context is in `.codecompass/memory.md`. Read them at session start if relevant to your task.

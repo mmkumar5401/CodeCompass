@@ -32,7 +32,7 @@ def _make_client(blast_results: dict):
 def _run(targets, blast_results, capsys, *, hops=3, rich=False):
     client = _make_client(blast_results)
     with patch("graph.code_query_cli.get_client", return_value=client):
-        run_batch_impact(targets, "test_project", max_hops=hops, rich=rich)
+        run_batch_impact(targets, ".", "test_project", max_hops=hops, rich=rich)
     return capsys.readouterr().out
 
 
@@ -111,7 +111,7 @@ def test_mixed_valid_invalid_exits_zero(capsys):
     client = _make_client(blast)
     with patch("graph.code_query_cli.get_client", return_value=client):
         # Should not raise SystemExit
-        run_batch_impact(["valid.py", "ghost.py"], "test_project")
+        run_batch_impact(["valid.py", "ghost.py"], ".", "test_project")
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ def test_all_invalid_exits_nonzero():
     client = _make_client({})
     with patch("graph.code_query_cli.get_client", return_value=client):
         with pytest.raises(SystemExit) as exc_info:
-            run_batch_impact(["ghost1.py", "ghost2.py"], "test_project")
+            run_batch_impact(["ghost1.py", "ghost2.py"], ".", "test_project")
     assert exc_info.value.code != 0
 
 
@@ -130,7 +130,7 @@ def test_all_invalid_prints_warning_per_target(capsys):
     client = _make_client({})
     with patch("graph.code_query_cli.get_client", return_value=client):
         with pytest.raises(SystemExit):
-            run_batch_impact(["ghost1.py", "ghost2.py"], "test_project")
+            run_batch_impact(["ghost1.py", "ghost2.py"], ".", "test_project")
     out = capsys.readouterr().out
     assert "ghost1.py" in out
     assert "ghost2.py" in out
@@ -168,7 +168,7 @@ def test_hops_forwarded_to_get_blast_radius():
     blast = {"a.py": ([], "a.py")}
     client = _make_client(blast)
     with patch("graph.code_query_cli.get_client", return_value=client):
-        run_batch_impact(["a.py"], "test_project", max_hops=1)
+        run_batch_impact(["a.py"], ".", "test_project", max_hops=1)
     client.get_blast_radius.assert_called_once_with("a.py", "test_project", 1)
 
 

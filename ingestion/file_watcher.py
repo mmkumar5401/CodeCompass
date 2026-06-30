@@ -21,7 +21,7 @@ from typing import Optional
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from watchdog.observers import Observer
 
-from graph.code_graph_client import CodeGraphClient
+from graph.code_graph_client import LocalGraphClient as CodeGraphClient
 from ingestion.code_parser import parse_file, SUPPORTED_EXTENSIONS
 
 

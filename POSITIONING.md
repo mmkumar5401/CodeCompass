@@ -1,7 +1,7 @@
 # CodeCompass — Positioning Brief
 
-**Version:** 0.2
-**Date:** 2026-06-17
+**Version:** 0.3
+**Date:** 2026-06-30
 **Status:** Active
 
 ---
@@ -29,6 +29,8 @@ The context window is not the problem. The problem is that nothing persists when
 | **Category** | Structural code context for AI agents |
 | **Direct Competitors** | None — category doesn't exist yet |
 | **Indirect / Status Quo** | Let agent explore freely · Sourcegraph (code search, not agent-native) · DIY embedding RAG pipelines |
+| **Setup barrier (old)** | Required running Neo4j database |
+| **Setup barrier (now)** | `pip install` only — graph is a local JSON file |
 | **Why They Choose Us** | Team reaction: "amazed it exists." Concrete proof: token→semantic migration completed without missed usages |
 | **Why They Reject / Leave** | No rejection evidence yet — primary barrier is awareness, not objection |
 | **Key Differentiator** | AST-derived structural truth. Agent-native output. |
@@ -88,7 +90,7 @@ Every other approach — embeddings, LLM extraction, keyword search — derives 
 
 > *"It doesn't show you the graph. It gives the graph to the agent."*
 
-Obsidian and Graphify produce visualisations and chat interfaces for human exploration. CodeCompass produces an MCP server — the code graph becomes native tools (`blast_radius`, `impact`, `deps`, …) in the agent's tool palette, available from any working directory. Instructions mandate graph-first queries. Session memory accumulates automatically via the plugin. Every design decision assumes the consumer is an LLM, not a human browsing a UI.
+Obsidian and Graphify produce visualisations and chat interfaces for human exploration. CodeCompass exposes the code graph as bash-runnable CLI commands — the agent calls them directly using its existing bash tool. Instructions mandate graph-first queries. Every design decision assumes the consumer is an LLM, not a human browsing a UI.
 
 ---
 
@@ -112,10 +114,10 @@ This is the sharpest demonstration of the JTBD: **the agent made a complete chan
 
 ## Current state
 
-- **MCP server** — 8 tools (blast_radius, impact, deps, trace, tree, styles, batch_impact, list_projects) exposed as native agent tools
-- **opencode plugin** — session memory auto-saves on compaction + idle
-- **Instructions** — graph-first rules loaded into every session
-- **One-command setup** — `./install.sh` from clone to working in minutes
+- **Zero-config local graph** — no Neo4j, no database; graph lives in `.codecompass/graph.json` inside each repo
+- **CLI query interface** — blast-radius, impact, deps, trace, tree, styles, batch-impact run via the agent's bash tool
+- **Instructions** — graph-first rules loaded into every opencode session
+- **One-command setup** — `pip install codecompass && codecompass setup` from zero to working
 - **Measured** — 46% token reduction, 30% cost reduction on realistic tasks
 - **Open source** — runs locally, your data stays on your machine
 
@@ -129,7 +131,7 @@ Ranked by RICE score against confirmed positioning:
 |---|---|---|---|---|
 | 1 | **Blast radius preview** | `supports-JTBD` `differentiator` | 84 | ✅ Done |
 | 2 | **Batch impact analysis** | `supports-JTBD` | 80 | ✅ Done |
-| 3 | **MCP server** | `differentiator` `category-hygiene` | 64 | ✅ Done |
+| 3 | **CLI query interface** | `differentiator` `category-hygiene` | 64 | ✅ Done |
 | 4 | **Git diff integration** | `supports-JTBD` `differentiator` | 48 | — |
 | 5 | **Language expansion** (Go, Java, Rust) | `category-hygiene` | 30/lang | —
 
@@ -146,9 +148,9 @@ Ranked by RICE score against confirmed positioning:
 The category ("structural code context for AI agents") does not exist yet. No buyer has a mental shelf for it. This is both the opportunity (define it, own it) and the primary challenge (explain it from scratch every time).
 
 **Implication for near-term focus:**
-- The product must create a "wow, I didn't know this existed" moment on first encounter — the MCP integration achieves this (tools appear alongside `read`, `edit`, `bash`)
+- The product must create a "wow, I didn't know this existed" moment on first encounter — the CLI integration achieves this (queries run alongside `read`, `edit`, `bash` with no extra setup)
 - The migration proof point is the wedge: lead with a concrete before/after story, not a feature list
-- MCP server shipped — any MCP-compatible agent can now call CodeCompass via `pip install codecompass-mcp`
+- CLI shipped — any agent with a bash tool can now run CodeCompass queries via `pip install codecompass`
 
 ---
 
@@ -166,5 +168,6 @@ The product: **an AI coding agent with a memory that compounds.**
 
 | Version | Date | Change |
 |---|---|---|
-| 0.2 | 2026-06-17 | MCP server shipped, opencode plugin, one-command setup, multi-agent positioning |
+| 0.3 | 2026-06-30 | Local graph migration complete — Neo4j removed, `.codecompass/graph.json` per repo, zero-config setup |
+| 0.2 | 2026-06-17 | CLI query interface, one-command setup, multi-agent positioning |
 | 0.1 | 2026-06-14 | Initial brief — segment, JTBD, category, differentiators confirmed |

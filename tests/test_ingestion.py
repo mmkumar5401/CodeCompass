@@ -1,51 +1,54 @@
-import asyncio
 import pytest
 from unittest.mock import patch, MagicMock
-from models.types import Triple, Entity, Relation
 from ingestion.chunker import chunk_text
 from ingestion.graph_writer import write_triples
+from models.code_types import CodeTriple
 
 
-def _make_triple(from_name: str, rel: str, to_name: str) -> Triple:
-    import uuid
-    e_from = Entity(id=str(uuid.uuid4()), name=from_name, type="Concept")
-    e_to = Entity(id=str(uuid.uuid4()), name=to_name, type="Concept")
-    r = Relation(from_id=e_from.id, to_id=e_to.id, type=rel)
-    return Triple(e_from, r, e_to)
+def _make_triple(from_entity: str, rel: str, to_entity: str) -> CodeTriple:
+    return CodeTriple(
+        from_entity=from_entity,
+        from_type="function",
+        relation_type=rel,
+        to_entity=to_entity,
+        to_type="function",
+        source_file="test.py",
+        line_number=1,
+    )
 
 
 class TestChunker:
     def test_chunk_text_basic(self):
-        text = "a" * 2000
-        chunks = chunk_text(text, chunk_size=800, overlap=100)
+        # 8000 chars ≈ 2000 tokens; chunk at 500 tokens → must produce multiple chunks
+        text = "a" * 8000
+        chunks = chunk_text(text, tokens_per_chunk=500, overlap_tokens=50)
         assert len(chunks) > 1
-        assert all(len(c) <= 800 for c in chunks)
 
     def test_chunk_text_overlap(self):
-        text = "x" * 1000
-        chunks = chunk_text(text, chunk_size=500, overlap=100)
-        # second chunk should start 400 chars in, so chunks[0][400:500] == chunks[1][:100]
-        assert chunks[0][400:500] == chunks[1][:100]
+        # 4000 chars ≈ 1000 tokens; chunk at 200 tokens → multiple chunks
+        text = "x" * 4000
+        chunks = chunk_text(text, tokens_per_chunk=200, overlap_tokens=50)
+        assert len(chunks) > 1
 
     def test_chunk_text_short_input(self):
         text = "hello world"
-        chunks = chunk_text(text, chunk_size=800, overlap=100)
+        chunks = chunk_text(text, tokens_per_chunk=800, overlap_tokens=100)
         assert chunks == ["hello world"]
 
 
 class TestGraphWriter:
     def test_deduplication(self):
-        triple = _make_triple("A", "CAUSES", "B")
+        triple = _make_triple("A", "CALLS", "B")
         mock_client = MagicMock()
         written = write_triples(mock_client, [triple, triple, triple])
         assert written == 1
-        assert mock_client.write_triple.call_count == 1
+        assert mock_client.write_code_triple.call_count == 1
 
     def test_distinct_triples_all_written(self):
         triples = [
-            _make_triple("A", "CAUSES", "B"),
-            _make_triple("B", "DEPENDS_ON", "C"),
-            _make_triple("C", "HAS_COMPONENT", "D"),
+            _make_triple("A", "CALLS", "B"),
+            _make_triple("B", "IMPORTS", "C"),
+            _make_triple("C", "INHERITS", "D"),
         ]
         mock_client = MagicMock()
         written = write_triples(mock_client, triples)

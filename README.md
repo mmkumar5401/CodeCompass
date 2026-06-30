@@ -1,55 +1,45 @@
-# CodeCompass — Stop guessing which files to read. Know what's connected before you edit.
+# CodeCompass
 
-[![PyPI version](https://img.shields.io/pypi/v/codecompass-mcp)](https://pypi.org/project/codecompass-mcp/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-
-Full-indexes an average repository in seconds, a large monorepo in minutes. Answers structural queries in under 3 seconds — *"what should I read before editing X?"*
-
-Neo4j-backed code dependency graph. Ingest once, then opencode's MCP tools (`blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`) tell the agent exactly which files to read — no blind exploration.
+A local code knowledge graph that gives AI agents (and humans) a map of your codebase — so they know what's connected before they edit.
 
 ---
 
-## What's new in v2.0
+## The problem
 
-| Feature | Description |
-|---|---|
-| PyPI package | `pip install codecompass-mcp` — works with any MCP-compatible agent |
-| MCP server | Code graph exposed as native opencode tools — `blast_radius`, `impact`, `deps`, `trace`, `tree`, `styles`, `batch_impact`, `list_projects` |
-| opencode plugin | Session memory auto-saves on compaction + idle |
-| One-command setup | `pip install` + `codecompass ingest-code` — no clone required |
-| Auto-registration | `ingest-code` writes `AGENTS.md` (opencode convention) instead of `CLAUDE.md` |
+AI coding agents read files one at a time. They don't know that renaming a function in `auth.py` will break three importers, a test file, and a CSS class that shares the name. They guess which files to open, miss dependencies, and introduce bugs.
+
+## The solution
+
+CodeCompass parses your codebase into a dependency graph — functions, classes, modules, imports, CSS selectors, HTML references — and stores it as a local JSON file. Agents query the graph before editing to see exactly what's connected.
+
+No database. No cloud. One JSON file per repo.
 
 ---
 
-## What it does
+## What you get
 
-Once configured, opencode has 8 native MCP tools for graph queries. The agent calls them automatically — no manual CLI needed.
+Every node in the graph carries:
+- **`kind`** — type and language combined (e.g. `function:python`, `class:typescript`, `css_selector:scss`)
+- **`description`** — human-readable label (e.g. `python function in src/auth/login.py`)
+- **Typed edges** — `CALLS`, `IMPORTS`, `INHERITS`, `DEFINED_IN`, `STYLES`, `USES_VAR`, `REFERENCES`, etc.
 
+Agents can answer structural questions in milliseconds without reading a single file:
+
+```bash
+# What breaks if I edit this?
+codecompass query --blast-radius src/auth/login.py
+
+# Who calls this function?
+codecompass query --impact "authenticate"
+
+# What does this file depend on?
+codecompass query --deps src/api/routes.py
+
+# Full project structure with entity types
+codecompass query --tree
 ```
-Agent sees these tools in every session:
-  list_projects  → "what repos are indexed?"
-  blast_radius   → "what files will my change touch?"
-  impact         → "what calls this function / uses this element?"
-  deps           → "what does this file import?"
-  trace          → "what's the forward call chain?"
-  tree           → "show me the project structure"
-  styles         → "what CSS targets this element?"
-  batch_impact   → "union blast radius for a multi-file PR"
-```
 
-Instructions (loaded via `opencode/instructions.md`) mandate: **always query the graph before editing code.**
-
-### When to use which tool
-
-| Scenario | Tool |
-|---|---|
-| About to edit one file or symbol | `blast_radius` first |
-| Planning a PR touching N files | `batch_impact` |
-| Renaming or removing a function | `impact` |
-| Understanding what a file imports | `deps` |
-| Tracing a call chain forward | `trace` |
-| Orienting in an unfamiliar project | `tree` |
-| Finding which CSS uses a design token | `impact "token-name"` |
+All commands default to the current directory.
 
 ---
 
@@ -58,174 +48,112 @@ Instructions (loaded via `opencode/instructions.md`) mandate: **always query the
 ### Prerequisites
 
 - Python 3.10+
-- Neo4j (any of the options below)
-- opencode CLI
+- pip
 
-### 1. Install the package
-
-```bash
-pip install codecompass-mcp
-```
-
-### 2. Start Neo4j
-
-Pick one:
-
-**Docker (fastest)**
-```bash
-docker run -d --name neo4j -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password123 neo4j:5.18
-```
-
-**Docker Compose** — clone the repo and run:
-```bash
-git clone https://github.com/<owner>/codecompass.git
-cd codecompass
-docker compose up -d
-```
-
-**Neo4j Desktop** — Download from [neo4j.com/download](https://neo4j.com/download)
-
-**AuraDB (cloud)** — [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura)
-
-### 3. Run setup
-
-Creates `.env`, writes instructions, plugin, and prints the opencode config:
+### Install
 
 ```bash
-codecompass setup
+# From the codecompass directory
+pip install -e .
 ```
 
-### 4. Ingest a codebase
+### Index a project
 
 ```bash
-codecompass ingest-code /path/to/repo --project <name>
+cd /path/to/your/project
+codecompass init
+codecompass ingest-code
 ```
 
-This writes a `## Code graph` section into the project's `AGENTS.md` automatically.
+That's it. Two commands:
+1. **`init`** creates `.codecompass/` and writes agent instructions into `AGENTS.md`
+2. **`ingest-code`** parses all source files and builds the graph
 
-### 5. Register with opencode
+`ingest-code` runs `init` automatically if `.codecompass/` doesn't exist yet.
 
-Merge the JSON that `codecompass setup` printed into `~/.config/opencode/opencode.json`:
+### What happens on init
 
-This outputs JSON to merge into `~/.config/opencode/opencode.json`. The resulting config:
+- Creates `.codecompass/` with `graph.json`, `overview.md`, `memory.md`, and `learnings.md`
+- Writes a `## Code graph` section into the project's `AGENTS.md` with mandatory rules for agents:
+  - Run `--blast-radius` before editing any file
+  - Run `--impact` before calling unfamiliar symbols
+  - Re-ingest after creating or deleting files
 
-```json
-{
-  "instructions": ["~/.config/opencode/codecompass/instructions.md"],
-  "mcp": {
-    "codecompass": {
-      "type": "local",
-      "command": ["codecompass-mcp"]
-    }
-  },
-  "plugin": ["~/.config/opencode/codecompass/plugins/memory.ts"]
-}
-```
+Any AI agent that reads `AGENTS.md` (Claude Code, OpenCode, Cursor, etc.) will follow these rules automatically.
 
-All files are self-contained in `~/.config/opencode/codecompass/` — no repo clone needed.
+---
 
-### 6. Open opencode
+## Queries
+
+| Command | When to use it |
+|---|---|
+| `codecompass query --blast-radius <file_or_symbol>` | Before editing — see everything that depends on it |
+| `codecompass query --impact <symbol>` | Before renaming/removing — find all callers and importers |
+| `codecompass query --deps <file>` | Understanding a file — see what it imports and uses |
+| `codecompass query --trace <function>` | Follow a call chain forward |
+| `codecompass query --tree` | Orient yourself — full project structure |
+| `codecompass query --styles <element>` | Find CSS selectors for an HTML element |
+| `codecompass query --batch-impact <f1> <f2> ...` | Multi-file PR — union blast radius |
+| `codecompass query --flow <entry_symbol>` | Trace the call/import flow from an entry point |
+| `codecompass query --dead-code` | Find functions/classes with no caller or importer |
+
+Add `--rich` for formatted table output. Add `--hops N` to control traversal depth (default: 3).
+
+### Dead code
+
+`--dead-code` reports entities with no inbound `CALLS`/`IMPORTS`/`REFERENCES` edge — candidates for removal such as old helpers, superseded function versions, or orphaned scripts:
 
 ```bash
-opencode
+codecompass query --dead-code                      # likely-dead only
+codecompass query --dead-code --include-entrypoints  # also show probable entry points
 ```
 
-Ask "what ingested projects are available?" — it should use `list_projects` to answer.
+Results are split into **likely dead** (private/internal, no caller) and **possible entry points** (`run_*`, handlers, tests — invoked by a runtime, not a static call). This is **static analysis**: dynamic dispatch, reflection, and string-based invocation are invisible, so every result is a candidate to verify (grep the name across the repo) before deleting.
 
-### Docker (alternative)
+### Flow charts
 
-Prefer everything containerized? Pull the pre-built image:
+`--flow` traces forward from an entry point along `CALLS` and `IMPORTS` edges. Pick an output format with `--format`:
 
 ```bash
-docker pull ghcr.io/<owner>/codecompass:latest
-docker run -d -p 8000:8000 \
-  -e NEO4J_URI=bolt://<host>:7687 \
-  -e NEO4J_USER=neo4j \
-  -e NEO4J_PASSWORD=password123 \
-  ghcr.io/<owner>/codecompass:latest
+codecompass query --flow "src.main" --hops 3                    # draw.io (default)
+codecompass query --flow "src.main" --format mermaid           # Markdown + mermaid
+codecompass query --flow "src.main" --format json              # agent narration
 ```
 
-Then configure opencode with `"type": "http", "url": "http://localhost:8000/sse"` for the MCP server. Run `codecompass setup` for instructions + plugin files.
+Every format numbers each call by source line so call order is explicit. By default, external/stdlib symbols are filtered out — add `--include-external` to show everything. Output is written to `.codecompass/flow_<entry>.{drawio,md,json}`.
+
+- **`drawio`** — opens in [draw.io](https://app.diagrams.net) (desktop or web). Nodes color-coded by type, entry point has a thick border, edges color-coded by relationship (blue = CALLS, green = IMPORTS).
+- **`mermaid`** — a Markdown file with an embedded mermaid flowchart that renders directly on GitHub. Convert to SVG with `npx @mermaid-js/mermaid-cli -i flow_<entry>.md -o flow_<entry>.svg`.
+- **`json`** — each node carries its real signature, docstring, source snippet, and line range; each edge carries its call order and call site. Built for agents: feed it to an LLM to generate a comprehensive data-flow explanation of how a pipeline or feature actually works.
 
 ---
 
 ## Commands
 
-### `ingest-code`
+| Command | Purpose |
+|---|---|
+| `codecompass init [path]` | Create `.codecompass/` and register in `AGENTS.md` |
+| `codecompass ingest-code [path]` | Parse source files and build/rebuild the graph |
+| `codecompass query <flags> [path]` | Query the graph (blast-radius, impact, deps, flow, tree, etc.) |
+| `codecompass watch [path]` | Live re-index on file changes |
+| `codecompass load-triples <file> <path>` | Load pre-processed triples from JSON |
+| `codecompass setup` | Copy instructions to `~/.config/opencode/codecompass/` |
 
-```bash
-codecompass ingest-code /path/to/repo --project <name>
-codecompass ingest-code /path/to/repo --project <name> --normalize
-codecompass ingest-code /path/to/repo --project <name> --dump-triples /tmp/raw.json
-```
-
-### `watch`
-
-Keep the graph live as you edit files:
-
-```bash
-codecompass watch /path/to/repo --project <name>
-```
-
-Watches for file creates, modifies, deletes, and renames. Incrementally re-ingests only changed files. The query CLI warns if the watcher isn't running.
-
-### `load-triples`
-
-Load pre-processed triples (e.g. after external normalization):
-
-```bash
-codecompass load-triples /tmp/normalized.json --project <name>
-```
-
-### Direct CLI queries (bypassing the agent)
-
-```bash
-python -m graph.code_query_cli --blast-radius path/to/file.py --project <project>
-python -m graph.code_query_cli --impact "FunctionName" --project <project>
-python -m graph.code_query_cli --tree <project>
-```
+All commands default to `.` (current directory) when path is omitted.
 
 ---
 
-## Session lifecycle
+## Supported languages
 
-```
-Open opencode (any directory)
-    ↓
-MCP tools registered (blast_radius, impact, deps, ...) + instructions loaded
-    ↓
-You ask questions / make edits
-    ↓
-Agent queries graph via MCP tools before touching code
-    ↓
-Compaction fires → plugin writes learnings to memory/learnings.md
-    ↓
-Session idle → plugin logs metadata to memory/session_log.md
-```
-
----
-
-## Common first-session tasks
-
-```
-In opencode, just ask naturally — instructions guide the agent:
-
-"what ingested projects are available?"
-  → agent calls list_projects()
-
-"what would break if I rename write_code_triple?"
-  → agent calls impact("write_code_triple", "codecompass")
-
-"I'm about to edit code_parser.py — what else is affected?"
-  → agent calls blast_radius("ingestion/code_parser.py", "codecompass")
-
-"I'm changing these 3 files — full blast radius?"
-  → agent calls batch_impact("file1, file2, file3", "codecompass")
-
-"show me the codecompass project structure"
-  → agent calls tree("codecompass")
-```
+| Language | Entity types extracted |
+|---|---|
+| Python | modules, functions, classes, imports, calls, inheritance |
+| JavaScript | modules, functions, classes, imports, calls |
+| TypeScript / TSX | modules, functions, classes, imports, calls |
+| HTML | elements, references, includes |
+| CSS | selectors, variables, definitions |
+| SCSS | selectors, variables, mixins, imports |
+| `.styles.ts` (Lit) | CSS-in-JS — `var(--token)` usages, `:host` declarations |
 
 ---
 
@@ -235,28 +163,23 @@ In opencode, just ask naturally — instructions guide the agent:
 Source files
     │
     ▼
-hierarchy_builder.py    — walks repo, writes Project → Folder → File skeleton
+hierarchy_builder    — walks repo → Project / Folder / File skeleton
     │
     ▼
-code_parser.py          — tree-sitter extraction (no API calls)
-    │                     Python, JS, TS, TSX → CALLS, IMPORTS, INHERITS
-    │                     CSS, SCSS → DEFINED_IN, USES_VAR, IMPORTS
-    │                     HTML → REFERENCES, INCLUDES
-    │                     .styles.ts (Lit) → secondary CSS pass on css`...` blocks
-    │                                        → USES_VAR + DEFINED_IN for design tokens
+code_parser          — tree-sitter extraction (no API calls)
+    │                  extracts entities + relationships as CodeTriples
     ▼
-Neo4j                   — typed relationships: [:CALLS], [:IMPORTS],
-                          [:INHERITS], [:STYLES], [:DEFINED_IN], [:USES_VAR], …
+graph.json           — NetworkX MultiDiGraph serialized as JSON node-link data
+    │                  typed edges: CALLS, IMPORTS, INHERITS, STYLES, DEFINED_IN, …
+    │                  node attrs: kind, description, language, entity_type, file
+    ▼
+code_query_cli       — graph traversal: blast-radius, impact, deps, trace, tree
     │
     ▼
-mcp_server.py           — MCP server exposing 8 tools (blast_radius, impact,
-                          deps, trace, tree, styles, batch_impact, list_projects)
-    │
-    ▼
-opencode agent          — calls MCP tools from any directory via instructions
+AGENTS.md            — mandatory rules injected into the project for any AI agent
 ```
 
-Typed relationships (not generic `RELATION {type: ...}`) mean variable-length path queries are index-scannable on Neo4j Community Edition.
+Everything runs locally, in-process. No network calls, no database, no API keys.
 
 ---
 
@@ -265,65 +188,49 @@ Typed relationships (not generic `RELATION {type: ...}`) mean variable-length pa
 ```
 codecompass/
 ├── graph/
-│   ├── code_graph_client.py    Neo4j I/O — nodes, edges, traversal queries
-│   ├── code_query_cli.py       CLI — blast-radius / batch-impact / deps /
-│   │                                  impact / trace / styles / tree
-│   └── mcp_server.py           MCP server — exposes 8 tools to opencode
+│   ├── cli.py                  pip entry point → main.py
+│   ├── code_graph_client.py    NetworkX graph client — nodes, edges, traversal
+│   ├── code_query_cli.py       query CLI — blast-radius / impact / deps / trace / tree / dead-code / flow
+│   └── setup.py                opencode setup wizard
 ├── ingestion/
-│   ├── code_parser.py          tree-sitter extraction + Lit css`...` pass
+│   ├── code_parser.py          tree-sitter entity + relationship extraction
 │   ├── hierarchy_builder.py    Project → Folder → File skeleton
-│   ├── file_watcher.py         incremental updates on file change
-│   └── code_normalizer.py      optional Haiku normalization pass
-├── memory/
-│   ├── decisions.md            architectural decisions (append-only)
-│   └── learnings.md            session learnings (auto-saved by plugin)
+│   ├── file_watcher.py         incremental re-index on file changes
+│   └── code_normalizer.py      optional entity name normalization (Haiku)
 ├── models/
 │   └── code_types.py           CodeTriple, FileNode, FolderNode
 ├── opencode/
-│   ├── config.template.json    opencode config template (MCP + plugin + instructions)
-│   ├── instructions.md         graph-first query rules loaded into every session
-│   ├── plugins/memory.ts       session memory plugin (compaction + idle hooks)
-│   └── scripts/                Python helpers called by the plugin
-├── config.py                   Neo4j config from .env
-├── main.py                     CLI: ingest-code / load-triples / watch
-├── install.sh                  one-command setup
-└── docker-compose.yml          Neo4j container
+│   └── instructions.md         agent instructions for opencode integration
+├── config.py                   env var config with fallback defaults
+└── main.py                     CLI dispatch: init / ingest-code / query / watch
+```
+
+Inside each indexed project:
+
+```
+your-project/
+├── .codecompass/
+│   ├── graph.json              the code knowledge graph (auto-generated)
+│   ├── overview.md             what the repo is / how to run it (read first)
+│   ├── memory.md               architecture & data flow (human-editable)
+│   └── learnings.md            gotchas, decisions, dead code (human-editable)
+└── AGENTS.md                   agent instructions (auto-updated by codecompass)
 ```
 
 ---
 
-## Automatic AGENTS.md registration
+## Tips
 
-Every `ingest-code` run writes a `## Code graph` block into the target project's `AGENTS.md` (creating the file if it doesn't exist). The block is wrapped in HTML comment markers so re-ingesting safely updates it in place.
-
-This means opencode automatically picks up the right `--project` name and query commands the next time a session opens in that directory — no manual setup.
-
----
-
-## Troubleshooting
-
-**`connection refused` on Neo4j**
-Neo4j is not running. Start your DBMS or use `docker run -d neo4j`.
-
-**`authentication failure` on Neo4j**
-Password in `.env` doesn't match. Reset it in Neo4j Desktop or recreate the Docker container.
-
-**`codecompass: command not found`**
-Run `pip install codecompass-mcp` to install the CLI.
-
-**MCP tools not appearing**
-Run `opencode debug config` to verify the codecompass MCP server is registered. Restart opencode after config changes.
-
-**`memory/learnings.md` is empty**
-Learnings are saved when compaction fires during long sessions. The plugin writes entries automatically on compaction and idle events.
+- **Commit or gitignore** `.codecompass/graph.json` — your choice. Committing it means teammates and CI get the graph for free.
+- **Re-ingest after refactors** — moved functions, renamed classes, deleted files. The graph doesn't auto-update unless `watch` is running.
+- **Use `watch` during active development** — `codecompass watch` keeps the graph current as you save files.
+- **Install once, use everywhere** — `pip install -e .` from the codecompass directory. The `codecompass` command works in any project.
 
 ---
 
 ## Limitations
 
-- Structure only — the graph knows what calls what, not what anything *means*
-- Supported languages: Python, JS, TS, TSX, HTML, CSS, SCSS, `.styles.ts` (Lit)
-- External callers (consumers outside the ingested repo) won't appear in `impact`
-- Lit CSS extraction covers explicit `var(--foo)` usages and `:host { --foo: ... }` declarations; generated property names from `theme.props()` patterns are not yet indexed
-- If Neo4j is down, the MCP server returns a clear error instead of a traceback
-- The watcher (`codecompass watch`) is separate from the MCP server — keep it running for live re-indexing on file changes
+- **Structure only** — the graph knows what calls what, not what anything *means*
+- **No cross-repo edges** — entities outside the indexed repo won't appear
+- **Lit CSS** covers explicit `var(--foo)` and `:host` declarations; generated property names from `theme.props()` are not indexed
+- **Large repos** (50k+ files) may produce sizable graph files — benchmark before committing

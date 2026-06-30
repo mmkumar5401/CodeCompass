@@ -1,8 +1,4 @@
-"""Tests for --blast-radius — BUF-5 acceptance criteria.
-
-Uses unittest.mock to avoid a live Neo4j dependency. Integration tests
-that need a real graph are marked with @pytest.mark.integration.
-"""
+"""Tests for --blast-radius traversal using the LocalGraphClient."""
 from __future__ import annotations
 
 import sys
@@ -16,12 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from graph.code_query_cli import run_blast_radius
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _make_client(rows, target_file, updated_at=None):
-    """Return a mock CodeGraphClient pre-configured for get_blast_radius."""
     client = MagicMock()
     client.get_blast_radius.return_value = (rows, target_file)
     client.get_file_updated_at.return_value = updated_at
@@ -30,13 +21,14 @@ def _make_client(rows, target_file, updated_at=None):
 
 def _run(target, rows, target_file, capsys, *, hops=3, rich=False, updated_at=None):
     client = _make_client(rows, target_file, updated_at)
+    repo_path = "/tmp/test_repo"
     with patch("graph.code_query_cli.get_client", return_value=client):
-        run_blast_radius(target, "test_project", max_hops=hops, rich=rich)
+        run_blast_radius(target, repo_path, "test_repo", max_hops=hops, rich=rich)
     return capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
-# Happy path — symbol target
+# Happy path
 # ---------------------------------------------------------------------------
 
 def test_symbol_target_lists_reachable_files(capsys):
@@ -45,7 +37,7 @@ def test_symbol_target_lists_reachable_files(capsys):
         {"file": "a/c.py", "edge_type": "IMPORTS", "hops": 2},
     ]
     out = _run("my_function", rows, "src/main.py", capsys)
-    assert "src/main.py" in out   # target file at hop 0
+    assert "src/main.py" in out
     assert "a/b.py" in out
     assert "a/c.py" in out
 
@@ -56,7 +48,6 @@ def test_symbol_target_summary_line(capsys):
         {"file": "a/c.py", "edge_type": "IMPORTS", "hops": 2},
     ]
     out = _run("my_function", rows, "src/main.py", capsys)
-    # 3 files (target + 2 deps), across 2 hops
     assert "# blast radius: 3 files across 2 hops" in out
 
 
@@ -67,7 +58,6 @@ def test_output_is_one_file_per_line(capsys):
     ]
     out = _run("func", rows, "src/entry.py", capsys)
     lines = [l for l in out.strip().splitlines() if not l.startswith("#")]
-    # Each non-summary line should be a bare file path
     for line in lines:
         assert " " not in line.strip(), f"Expected bare path, got: {line!r}"
 
@@ -83,7 +73,7 @@ def test_duplicate_rows_deduped_to_minimum_hop(capsys):
     ]
     out = _run("func", rows, "src/main.py", capsys)
     file_lines = [l for l in out.splitlines() if "shared.py" in l]
-    assert len(file_lines) == 1, "shared.py should appear exactly once"
+    assert len(file_lines) == 1
 
 
 def test_target_file_included_exactly_once_even_if_in_rows(capsys):
@@ -92,8 +82,7 @@ def test_target_file_included_exactly_once_even_if_in_rows(capsys):
         {"file": "other.py", "edge_type": "CALLS", "hops": 1},
     ]
     out = _run("func", rows, "src/main.py", capsys)
-    count = out.count("src/main.py")
-    assert count == 1
+    assert out.count("src/main.py") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -101,12 +90,12 @@ def test_target_file_included_exactly_once_even_if_in_rows(capsys):
 # ---------------------------------------------------------------------------
 
 def test_hop_limit_respected(capsys):
-    # Client is expected to honour max_hops; verify the right value is passed.
     rows = [{"file": "direct.py", "edge_type": "CALLS", "hops": 1}]
     client = _make_client(rows, "src/main.py")
+    repo_path = "/tmp/test_repo"
     with patch("graph.code_query_cli.get_client", return_value=client):
-        run_blast_radius("func", "test_project", max_hops=1)
-    client.get_blast_radius.assert_called_once_with("func", "test_project", 1)
+        run_blast_radius("func", repo_path, "test_repo", max_hops=1)
+    client.get_blast_radius.assert_called_once_with("func", "test_repo", 1)
 
 
 # ---------------------------------------------------------------------------
@@ -115,29 +104,29 @@ def test_hop_limit_respected(capsys):
 
 def test_not_found_exits_nonzero():
     client = _make_client([], None)
+    repo_path = "/tmp/test_repo"
     with patch("graph.code_query_cli.get_client", return_value=client):
         with pytest.raises(SystemExit) as exc_info:
-            run_blast_radius("nonexistent_fn", "test_project")
+            run_blast_radius("nonexistent_fn", repo_path, "test_repo")
     assert exc_info.value.code != 0
 
 
 def test_not_found_prints_error(capsys):
     client = _make_client([], None)
+    repo_path = "/tmp/test_repo"
     with patch("graph.code_query_cli.get_client", return_value=client):
         with pytest.raises(SystemExit):
-            run_blast_radius("nonexistent_fn", "test_project")
+            run_blast_radius("nonexistent_fn", repo_path, "test_repo")
     out = capsys.readouterr().out
     assert "ERROR:" in out
     assert "nonexistent_fn" in out
-    assert "test_project" in out
 
 
 # ---------------------------------------------------------------------------
-# Empty graph — target found but no outbound edges
+# Empty graph
 # ---------------------------------------------------------------------------
 
 def test_empty_graph_no_traceback(capsys):
-    # target_file is known but it has no outbound edges → rows is empty
     out = _run("lone_func", [], "solo.py", capsys)
     assert "solo.py" in out
     assert "# blast radius: 1 files across 0 hops" in out

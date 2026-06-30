@@ -133,7 +133,7 @@ def _parent_id(folder: FolderNode, project_name: str, project_id: str) -> str:
     return _stable_id(f"folder:{project_name}:{parent_path}")
 
 
-def get_file_id_map(project_name: str, client) -> dict[str, str]:
+def get_file_id_map(repo_path: str, project_name: str, client) -> dict[str, str]:
     """Reconstruct the {relative_path: node_id} map from the existing graph.
 
     Used by load-triples to attach entity nodes to File nodes that were

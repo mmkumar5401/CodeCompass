@@ -1,5 +1,5 @@
+networkx>=3.3
 anthropic>=0.40.0
-neo4j>=5.18.0
 pypdf2>=3.0.0
 python-dotenv>=1.0.0
 rich>=13.0.0

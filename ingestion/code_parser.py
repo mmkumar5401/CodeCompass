@@ -155,6 +155,18 @@ def _children_of_type(node: Node, type_name: str) -> list[Node]:
 # Python extraction
 # ---------------------------------------------------------------------------
 
+def _enclosing_scope(node: Node) -> str | None:
+    """Walk up from node to find the nearest enclosing function or class name."""
+    current = node.parent
+    while current:
+        if current.type in ("function_definition", "class_definition"):
+            name_node = _child_of_type(current, "identifier")
+            if name_node:
+                return _text(name_node)
+        current = current.parent
+    return None
+
+
 def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
     module_name = _module_name_from_path(file_path)
     triples: list[CodeTriple] = []
@@ -234,9 +246,12 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
             case "call":
                 callee = _extract_python_callee(node)
                 if callee and _is_meaningful_callee(callee):
+                    scope = _enclosing_scope(node)
+                    caller = scope or module_name
+                    caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
                     triples.append(CodeTriple(
-                        from_entity=module_name,
-                        from_type=TYPE_MODULE,
+                        from_entity=caller,
+                        from_type=caller_type,
                         relation_type=CALLS,
                         to_entity=callee,
                         to_type=TYPE_FUNCTION,
@@ -256,7 +271,12 @@ def _extract_python_callee(call_node: Node) -> str | None:
     if fn_node.type == "identifier":
         return _text(fn_node)
     if fn_node.type == "attribute":
-        attr = _child_of_type(fn_node, "identifier")
+        # `obj.method` — the attribute being called is the LAST identifier,
+        # not the object it's accessed on (e.g. pipeline.submit → "submit").
+        attr = fn_node.child_by_field_name("attribute")
+        if attr is None:
+            idents = [c for c in fn_node.children if c.type == "identifier"]
+            attr = idents[-1] if idents else None
         return _text(attr) if attr else None
     return None
 
@@ -336,9 +356,12 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
             case "call_expression":
                 callee = _extract_js_callee(node)
                 if callee and _is_meaningful_callee(callee):
+                    scope = _enclosing_js_scope(node)
+                    caller = scope or module_name
+                    caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
                     triples.append(CodeTriple(
-                        from_entity=module_name,
-                        from_type=TYPE_MODULE,
+                        from_entity=caller,
+                        from_type=caller_type,
                         relation_type=CALLS,
                         to_entity=callee,
                         to_type=TYPE_FUNCTION,
@@ -347,6 +370,29 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
                     ))
 
     return triples
+
+
+def _enclosing_js_scope(node: Node) -> str | None:
+    """Walk up from node to find the nearest enclosing function name in JS/TS."""
+    current = node.parent
+    while current:
+        if current.type in ("function_declaration", "function_expression"):
+            name_node = _child_of_type(current, "identifier")
+            if name_node:
+                return _text(name_node)
+        elif current.type == "method_definition":
+            name_node = _child_of_type(current, "property_identifier")
+            if name_node:
+                return _text(name_node)
+        elif current.type == "variable_declarator":
+            for child in current.children:
+                if child.type in ("arrow_function", "function_expression"):
+                    name_node = _child_of_type(current, "identifier")
+                    if name_node:
+                        return _text(name_node)
+                    break
+        current = current.parent
+    return None
 
 
 def _extract_js_callee(call_node: Node) -> str | None:
@@ -696,7 +742,7 @@ def _is_meaningful_callee(name: str) -> bool:
     return (
         name not in _NOISE_CALLEES
         and len(name) > 1
-        and not name.startswith("_")
+        and not name.startswith("__")
     )
 
 
