@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.3.0] - 2026-07-01
+
+### Added
+- `codecompass init` now writes a "read `.codecompass` before making any changes or
+  before reading any file" instruction into both `claude.md` and the `AGENTS.md` Code
+  graph block, so agents surface this guidance automatically on init/re-ingest.
+- PHP language support in the code parser: function/class/call extraction via
+  `tree-sitter-php`, registered alongside the existing language extractors.
+
+### Fixed
+- `reader_agent.py` now only strips markdown code fences when the LLM response
+  actually starts with one, instead of unconditionally.
+
+### Removed
+- Dropped the unused `chunk_pdf()` helper and its `PyPDF2` dependency.
+- Dropped the unused `dry_run` parameter from `entity_resolver.resolve_entities()`.
+
 ## [2.2.0] - 2026-06-30
 
 🚀 **The Foundation Release**
