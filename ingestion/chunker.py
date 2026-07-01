@@ -1,5 +1,4 @@
 import re
-import PyPDF2
 
 # Rough approximation: 1 token ≈ 4 characters (standard for English prose/code).
 # Used when a tokeniser library is unavailable.
@@ -8,14 +7,6 @@ _CHARS_PER_TOKEN = 4
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // _CHARS_PER_TOKEN)
-
-
-def chunk_pdf(filepath: str, tokens_per_chunk: int = 500, overlap_tokens: int = 50) -> list[str]:
-    """Split PDF into overlapping token-sized chunks."""
-    with open(filepath, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
-        full_text = " ".join(page.extract_text() or "" for page in reader.pages)
-    return chunk_text(full_text, tokens_per_chunk=tokens_per_chunk, overlap_tokens=overlap_tokens)
 
 
 def chunk_text(text: str, tokens_per_chunk: int = 500, overlap_tokens: int = 50) -> list[str]:

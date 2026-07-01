@@ -23,6 +23,10 @@ console = Console()
 
 _CODECOMPASS_START = "<!-- codecompass-code-graph-start -->"
 _CODECOMPASS_END = "<!-- codecompass-code-graph-end -->"
+_CODECOMPASS_READ_INSTRUCTION = (
+    "Read `.codecompass` before making any changes or before reading any file. "
+    "If you think codecompass will help in any way, use it."
+)
 
 
 def init_project(repo_path: str) -> None:
@@ -68,6 +72,20 @@ def init_project(repo_path: str) -> None:
         if not os.path.exists(file_path):
             with open(file_path, "w") as f:
                 f.write(content)
+
+    # ponytail: minimal way to create claude.md in repo root
+    claude_md_path = os.path.join(repo_path, "claude.md")
+    if not os.path.exists(claude_md_path):
+        with open(claude_md_path, "w") as f:
+            f.write(f"AGENTS.md\n\n{_CODECOMPASS_READ_INSTRUCTION}\n")
+    else:
+        with open(claude_md_path) as f:
+            claude_md_content = f.read()
+        if _CODECOMPASS_READ_INSTRUCTION not in claude_md_content:
+            with open(claude_md_path, "a") as f:
+                if claude_md_content and not claude_md_content.endswith("\n"):
+                    f.write("\n")
+                f.write(f"\n{_CODECOMPASS_READ_INSTRUCTION}\n")
 
     _ensure_gitignore(repo_path)
     console.print(f"[bold green]Initialized CodeCompass in:[/] {compass_dir}")
@@ -172,6 +190,8 @@ def _register_project_agents_md(repo_path: str) -> None:
     """Write or update the Code graph section in the project's AGENTS.md."""
     block = f"""{_CODECOMPASS_START}
 ## Code graph
+
+**{_CODECOMPASS_READ_INSTRUCTION}**
 
 This project has a CodeCompass code knowledge graph at `.codecompass/graph.json`.
 Every node carries `kind` (e.g. `function:python`, `class:typescript`) and a

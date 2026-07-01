@@ -58,9 +58,10 @@ def _extract_triples_sync(chunk: str) -> list[Triple]:
     )
 
     try:
-        raw = response.content[0].text
-        raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.MULTILINE)
-        raw = re.sub(r"```$", "", raw.strip(), flags=re.MULTILINE)
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"```$", "", raw)
         data = json.loads(raw.strip())
     except (json.JSONDecodeError, IndexError) as e:
         print(f"[reader_agent] JSON parse failed: {e} | raw: {raw[:200]!r}")

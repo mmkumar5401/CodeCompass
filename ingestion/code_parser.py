@@ -21,7 +21,7 @@ from models.code_types import CodeTriple
 # Constants
 # ---------------------------------------------------------------------------
 
-SUPPORTED_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".html", ".css", ".scss"}
+SUPPORTED_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".html", ".css", ".scss", ".php"}
 
 # Relation types
 DEFINED_IN = "DEFINED_IN"
@@ -101,6 +101,11 @@ def _load_html_parser() -> tuple[Parser, Language]:
     return _make_parser(tshtml.language)
 
 
+def _load_php_parser() -> tuple[Parser, Language]:
+    import tree_sitter_php as tsphp
+    return _make_parser(tsphp.language)
+
+
 def _load_css_parser() -> tuple[Parser, Language]:
     import tree_sitter_css as tscss
     return _make_parser(tscss.language)
@@ -114,6 +119,7 @@ _PARSER_LOADERS: dict[str, Callable[[], tuple[Parser, Language]]] = {
     ".html": _load_html_parser,
     ".css":  _load_css_parser,
     ".scss": _load_css_parser,
+    ".php":  _load_php_parser,
 }
 
 
@@ -147,6 +153,15 @@ def _child_of_type(node: Node, type_name: str) -> Node | None:
     return None
 
 
+def _get_node_name(node: Node, types: list[str]) -> str | None:
+    """Try multiple type names to find an identifier/name node."""
+    for t in types:
+        found = _child_of_type(node, t)
+        if found:
+            return _text(found)
+    return None
+
+
 def _children_of_type(node: Node, type_name: str) -> list[Node]:
     return [c for c in node.children if c.type == type_name]
 
@@ -174,23 +189,23 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
     for node in _walk(root):
         match node.type:
             case "function_definition":
-                name_node = _child_of_type(node, "identifier")
-                if name_node:
+                name = _get_node_name(node, ["identifier"])
+                if name:
                     triples.append(CodeTriple(
-                        from_entity=_text(name_node),
+                        from_entity=name,
                         from_type=TYPE_FUNCTION,
                         relation_type=DEFINED_IN,
                         to_entity=module_name,
                         to_type=TYPE_MODULE,
                         source_file=file_path,
-                        line_number=_line(name_node),
+                        line_number=_line(node),
                     ))
 
             case "class_definition":
-                name_node = _child_of_type(node, "identifier")
-                if not name_node:
+                name = _get_node_name(node, ["identifier"])
+                if not name:
                     continue
-                class_name = _text(name_node)
+                class_name = name
 
                 # Extract base classes from argument_list
                 arg_list = _child_of_type(node, "argument_list")
@@ -280,6 +295,72 @@ def _extract_python_callee(call_node: Node) -> str | None:
         return _text(attr) if attr else None
     return None
 
+
+# ---------------------------------------------------------------------------
+# PHP extraction
+# ---------------------------------------------------------------------------
+
+def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
+    module_name = _module_name_from_path(file_path)
+    triples: list[CodeTriple] = []
+
+    for node in _walk(root):
+        match node.type:
+            case "function_definition":
+                name = _get_node_name(node, ["function_name", "identifier"])
+                if name:
+                    triples.append(CodeTriple(
+                        from_entity=name,
+                        from_type=TYPE_FUNCTION,
+                        relation_type=DEFINED_IN,
+                        to_entity=module_name,
+                        to_type=TYPE_MODULE,
+                        source_file=file_path,
+                        line_number=_line(node),
+                    ))
+
+            case "class_definition":
+                name = _get_node_name(node, ["class_name", "identifier"])
+                if not name:
+                    continue
+                class_name = name
+
+                # Extract base classes (extends)
+                extends_node = _child_of_type(node, "extends_clause")
+                if extends_node:
+                    base_node = _child_of_type(extends_node, "type_name") or _child_of_type(extends_node, "identifier")
+                    if base_node:
+                        triples.append(CodeTriple(
+                            from_entity=class_name,
+                            from_type=TYPE_CLASS,
+                            relation_type=INHERITS,
+                            to_entity=_text(base_node),
+                            to_type=TYPE_CLASS,
+                            source_file=file_path,
+                            line_number=_line(base_node),
+                        ))
+
+            case "function_call":
+                callee = _extract_php_callee(node)
+                if callee and _is_meaningful_callee(callee):
+                    scope = _enclosing_scope(node) # Reuse python-style scope walker for now
+                    caller = scope or module_name
+                    caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
+                    triples.append(CodeTriple(
+                        from_entity=caller,
+                        from_type=caller_type,
+                        relation_type=CALLS,
+                        to_entity=callee,
+                        to_type=TYPE_FUNCTION,
+                        source_file=file_path,
+                        line_number=_line(node),
+                    ))
+
+    return triples
+
+
+def _extract_php_callee(call_node: Node) -> str | None:
+    return _get_node_name(call_node, ["function_name", "identifier"])
 
 # ---------------------------------------------------------------------------
 # JavaScript / TypeScript extraction
@@ -647,6 +728,7 @@ _EXTRACTORS: dict[str, Callable] = {
     ".html": _extract_html,
     ".css":  _extract_css,
     ".scss": _extract_css,
+    ".php":  _extract_php,
 }
 
 
