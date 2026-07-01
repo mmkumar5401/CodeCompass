@@ -23,7 +23,7 @@ Return ONLY valid JSON, no other text:
 If no clear duplicates exist, return {"groups": []}"""
 
 
-def resolve_entities(client, dry_run: bool = False) -> int:
+def resolve_entities(client) -> int:
     """Identify and merge duplicate entity nodes in the local graph."""
     all_nodes = [
         {"id": n, "name": attr.get("name", n), "type": attr.get("entity_type", "")}
@@ -79,20 +79,18 @@ def resolve_entities(client, dry_run: bool = False) -> int:
             dup_node = name_to_node.get(dup_name)
             if not dup_node or dup_node["id"] == canonical_node["id"]:
                 continue
-            tag = "[dry-run] " if dry_run else ""
-            print(f"  {tag}'{dup_name}'  →  '{canonical_name}'")
-            if not dry_run:
-                # Remap all edges from duplicate to canonical
-                dup_id = dup_node["id"]
-                canon_id = canonical_node["id"]
-                for pred in list(client.graph.predecessors(dup_id)):
-                    for key, data in list(client.graph.get_edge_data(pred, dup_id).items()):
-                        client.graph.add_edge(pred, canon_id, **data)
-                for succ in list(client.graph.successors(dup_id)):
-                    for key, data in list(client.graph.get_edge_data(dup_id, succ).items()):
-                        client.graph.add_edge(canon_id, succ, **data)
-                client.graph.remove_node(dup_id)
-                merged_count += 1
+            print(f"  '{dup_name}'  →  '{canonical_name}'")
+            # Remap all edges from duplicate to canonical
+            dup_id = dup_node["id"]
+            canon_id = canonical_node["id"]
+            for pred in list(client.graph.predecessors(dup_id)):
+                for key, data in list(client.graph.get_edge_data(pred, dup_id).items()):
+                    client.graph.add_edge(pred, canon_id, **data)
+            for succ in list(client.graph.successors(dup_id)):
+                for key, data in list(client.graph.get_edge_data(dup_id, succ).items()):
+                    client.graph.add_edge(canon_id, succ, **data)
+            client.graph.remove_node(dup_id)
+            merged_count += 1
 
     if merged_count:
         client.save()
