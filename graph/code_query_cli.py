@@ -667,6 +667,11 @@ _KIND_FILL = {
     "module": "#E8F5E9",
     "endpoint": "#FCE4EC",
     "variable": "#F3E5F5",
+    "interface": "#FFF8E1",
+    "trait": "#E0F7FA",
+    "enum": "#EDE7F6",
+    "property": "#FBE9E7",
+    "constant": "#F1F8E9",
 }
 
 

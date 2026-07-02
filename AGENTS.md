@@ -1,6 +1,8 @@
 <!-- codecompass-code-graph-start -->
 ## Code graph
 
+**Read `.codecompass` before making any changes or before reading any file. If you think codecompass will help in any way, use it.**
+
 This project has a CodeCompass code knowledge graph at `.codecompass/graph.json`.
 Every node carries `kind` (e.g. `function:python`, `class:typescript`) and a
 human-readable `description`. Use it as your primary navigation tool.

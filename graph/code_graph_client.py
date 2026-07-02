@@ -17,11 +17,13 @@ from models.code_types import CodeTriple, FileNode, FolderNode
 _EXT_TO_LANGUAGE = {
     ".py": "python",
     ".js": "javascript",
+    ".jsx": "javascript",
     ".ts": "typescript",
     ".tsx": "typescript",
     ".html": "html",
     ".css": "css",
     ".scss": "scss",
+    ".php": "php",
 }
 
 _ALLOWED_REL_TYPES = frozenset({

@@ -44,7 +44,8 @@ Your job:
    POSTS_TO, INCLUDES, USED_BY, OVERRIDES, RAISES, RETURNS_TYPE.
 3. Correct entity types if obviously wrong.
    Allowed types: function, class, module, css_selector, html_element,
-   scss_mixin, scss_variable, endpoint, css_class, file.
+   scss_mixin, scss_variable, endpoint, css_class, file, interface, trait,
+   enum, property, constant.
 
 Return the same JSON array with corrections applied.
 Do NOT add, remove, or reorder triples.

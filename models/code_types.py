@@ -8,7 +8,8 @@ class CodeTriple:
     """A single typed relationship extracted from source code."""
 
     from_entity: str
-    from_type: str   # function | class | module | css_selector | html_element | scss_mixin | scss_variable
+    from_type: str   # function | class | module | css_selector | html_element | scss_mixin | scss_variable |
+                      # interface | trait | enum | property | constant
     relation_type: str  # CALLS | IMPORTS | INHERITS | DEFINED_IN | STYLES | HAS_CLASS | POSTS_TO | INCLUDES | USED_BY
     to_entity: str
     to_type: str

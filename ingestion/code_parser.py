@@ -3,7 +3,7 @@
 Parses source files locally (no API calls) into typed CodeTriples.
 Uses direct AST node walking — compatible with any tree-sitter version.
 
-Supports: .py, .js, .ts, .tsx, .html, .css, .scss
+Supports: .py, .js, .jsx, .ts, .tsx, .html, .css, .scss, .php
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from models.code_types import CodeTriple
 # Constants
 # ---------------------------------------------------------------------------
 
-SUPPORTED_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".html", ".css", ".scss", ".php"}
+SUPPORTED_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".scss", ".php"}
 
 # Relation types
 DEFINED_IN = "DEFINED_IN"
@@ -47,6 +47,23 @@ TYPE_SCSS_VARIABLE = "scss_variable"
 TYPE_ENDPOINT = "endpoint"
 TYPE_CSS_CLASS = "css_class"
 TYPE_FILE = "file"
+TYPE_INTERFACE = "interface"
+TYPE_TRAIT = "trait"
+TYPE_ENUM = "enum"
+TYPE_PROPERTY = "property"
+TYPE_CONSTANT = "constant"
+
+# PHP pseudo-class references that never resolve to a real, distinct entity.
+_PHP_SELF_REFERENTIAL = {"self", "static", "parent"}
+
+# Container node types that own PHP class-body members (properties, consts,
+# trait uses), mapped to the entity type of the container itself.
+_PHP_CONTAINER_TYPES = {
+    "class_declaration": TYPE_CLASS,
+    "trait_declaration": TYPE_TRAIT,
+    "interface_declaration": TYPE_INTERFACE,
+    "enum_declaration": TYPE_ENUM,
+}
 
 # Regex patterns for CSS/SCSS source scanning
 _CSS_VAR_RE = re.compile(r'var\(\s*(--[\w-]+)')
@@ -103,7 +120,7 @@ def _load_html_parser() -> tuple[Parser, Language]:
 
 def _load_php_parser() -> tuple[Parser, Language]:
     import tree_sitter_php as tsphp
-    return _make_parser(tsphp.language)
+    return _make_parser(tsphp.language_php)
 
 
 def _load_css_parser() -> tuple[Parser, Language]:
@@ -114,6 +131,7 @@ def _load_css_parser() -> tuple[Parser, Language]:
 _PARSER_LOADERS: dict[str, Callable[[], tuple[Parser, Language]]] = {
     ".py":   _load_python_parser,
     ".js":   _load_javascript_parser,
+    ".jsx":  _load_javascript_parser,
     ".ts":   _load_typescript_parser,
     ".tsx":  _load_tsx_parser,
     ".html": _load_html_parser,
@@ -218,7 +236,7 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                             to_entity=_text(base),
                             to_type=TYPE_CLASS,
                             source_file=file_path,
-                            line_number=_line(name_node),
+                            line_number=_line(base),
                         ))
 
             case "import_statement":
@@ -299,68 +317,366 @@ def _extract_python_callee(call_node: Node) -> str | None:
 # ---------------------------------------------------------------------------
 # PHP extraction
 # ---------------------------------------------------------------------------
+#
+# Node-type names below were verified against tree_sitter_php 0.24.1 by
+# parsing representative snippets and inspecting the resulting AST directly
+# (the grammar ships no node-types.json in the pip package). Names differ
+# substantially from other PHP tree-sitter grammar versions found online —
+# e.g. classes are `class_declaration` (not `class_definition`), function
+# calls are `function_call_expression` (not `function_call`), and name
+# fields are typed `name` (not `identifier`).
+
+def _php_name(node: Node) -> str | None:
+    """Direct `name` child — used for the declared name of most PHP nodes."""
+    found = _child_of_type(node, "name")
+    return _text(found) if found else None
+
+
+def _php_basename(node: Node) -> str:
+    """Strip a namespace prefix: `App\\Models\\Foo` -> `Foo`. Also handles a
+    bare `name` node (no backslash) and a leading-backslash FQN (`\\Foo`)."""
+    return _text(node).rsplit("\\", 1)[-1]
+
+
+def _php_dotted(node: Node) -> str:
+    """Namespace-qualified name -> dotted form, matching the module-name
+    convention used elsewhere (`App\\Models\\Foo` -> `App.Models.Foo`)."""
+    return _text(node).lstrip("\\").replace("\\", ".")
+
+
+def _php_var_name(node: Node) -> str:
+    """`variable_name` node text (`$name`) -> bare name (`name`)."""
+    return _text(node).lstrip("$")
+
+
+def _php_extends_targets(clause: Node) -> list[Node]:
+    """`name`/`qualified_name` children of a base_clause or interface clause.
+
+    Handles both single-target class `extends` and multi-target interface
+    `extends`/`implements` (comma-separated siblings, not a nested list).
+    """
+    return [c for c in clause.children if c.type in ("name", "qualified_name")]
+
+
+def _enclosing_php_container(node: Node) -> tuple[str, str] | None:
+    """Walk up to the nearest enclosing class/trait/interface/enum.
+
+    Used to attach properties, constants, and trait-uses to their owner.
+    """
+    current = node.parent
+    while current:
+        entity_type = _PHP_CONTAINER_TYPES.get(current.type)
+        if entity_type:
+            name = _php_name(current)
+            if name:
+                return name, entity_type
+        current = current.parent
+    return None
+
+
+def _enclosing_php_scope(node: Node) -> tuple[str, str] | None:
+    """Walk up from node to find the nearest enclosing function/method/closure.
+
+    Closures (anonymous_function, arrow_function) only count as a scope if
+    assigned to a variable (`$fn = function() {...}`), whose name is then
+    used as the caller entity; unnamed inline closures are transparent and
+    resolution continues further up the tree.
+    """
+    current = node.parent
+    while current:
+        if current.type in ("function_definition", "method_declaration"):
+            name = _php_name(current)
+            if name:
+                return name, TYPE_FUNCTION
+        elif current.type in ("anonymous_function", "arrow_function"):
+            parent = current.parent
+            if parent and parent.type == "assignment_expression" and parent.children:
+                lhs = parent.children[0]
+                if lhs.type == "variable_name":
+                    return _php_var_name(lhs), TYPE_FUNCTION
+        current = current.parent
+    return None
+
+
+def _extract_php_namespace_use(node: Node) -> list[tuple[str, Node]]:
+    """Resolve every imported target of a `use ...;` statement to a dotted
+    name plus the node to attribute the line number to.
+
+    Handles plain (`use App\\Foo;`), aliased (`use App\\Foo as F;`), grouped
+    (`use App\\{Bar, Baz as Z};`), and `use function`/`use const` forms.
+    """
+    results: list[tuple[str, Node]] = []
+    group = _child_of_type(node, "namespace_use_group")
+    if group is not None:
+        prefix_node = _child_of_type(node, "namespace_name")
+        prefix = _text(prefix_node) if prefix_node else ""
+        for clause in _children_of_type(group, "namespace_use_clause"):
+            target = _child_of_type(clause, "qualified_name") or _child_of_type(clause, "name")
+            if target:
+                full = f"{prefix}\\{_text(target)}" if prefix else _text(target)
+                results.append((full.lstrip("\\").replace("\\", "."), target))
+    else:
+        for clause in _children_of_type(node, "namespace_use_clause"):
+            target = _child_of_type(clause, "qualified_name") or _child_of_type(clause, "name")
+            if target:
+                results.append((_php_dotted(target), target))
+    return results
+
+
+def _php_include_target(node: Node) -> Node | None:
+    """The literal string argument of a require/include expression, if any.
+
+    Dynamic paths (`require __DIR__ . '/x.php';`) have no plain `string`
+    child and are skipped — no static target to record.
+    """
+    return _child_of_type(node, "string")
+
+
+def _php_string_text(string_node: Node) -> str:
+    frag = _child_of_type(string_node, "string_content")
+    return _text(frag) if frag else _text(string_node).strip("'\"")
+
 
 def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
     module_name = _module_name_from_path(file_path)
     triples: list[CodeTriple] = []
 
+    def defined_in(name: str, entity_type: str, line: int) -> None:
+        triples.append(CodeTriple(
+            from_entity=name,
+            from_type=entity_type,
+            relation_type=DEFINED_IN,
+            to_entity=module_name,
+            to_type=TYPE_MODULE,
+            source_file=file_path,
+            line_number=line,
+        ))
+
+    def inherits(from_name: str, from_type: str, to_node: Node, to_type: str) -> None:
+        basename = _php_basename(to_node)
+        if basename and basename.lower() not in _PHP_SELF_REFERENTIAL:
+            triples.append(CodeTriple(
+                from_entity=from_name,
+                from_type=from_type,
+                relation_type=INHERITS,
+                to_entity=basename,
+                to_type=to_type,
+                source_file=file_path,
+                line_number=_line(to_node),
+            ))
+
+    def calls(callee: str, callee_type: str, line: int, scope_node: Node) -> None:
+        if not callee or not _is_meaningful_callee(callee):
+            return
+        scope = _enclosing_php_scope(scope_node)
+        caller, caller_type = scope if scope else (module_name, TYPE_MODULE)
+        triples.append(CodeTriple(
+            from_entity=caller,
+            from_type=caller_type,
+            relation_type=CALLS,
+            to_entity=callee,
+            to_type=callee_type,
+            source_file=file_path,
+            line_number=line,
+        ))
+
     for node in _walk(root):
         match node.type:
+            # -- Functions -----------------------------------------------
             case "function_definition":
-                name = _get_node_name(node, ["function_name", "identifier"])
+                name = _php_name(node)
                 if name:
-                    triples.append(CodeTriple(
-                        from_entity=name,
-                        from_type=TYPE_FUNCTION,
-                        relation_type=DEFINED_IN,
-                        to_entity=module_name,
-                        to_type=TYPE_MODULE,
-                        source_file=file_path,
-                        line_number=_line(node),
-                    ))
+                    defined_in(name, TYPE_FUNCTION, _line(node))
 
-            case "class_definition":
-                name = _get_node_name(node, ["class_name", "identifier"])
+            case "method_declaration":
+                name = _php_name(node)
+                if name:
+                    defined_in(name, TYPE_FUNCTION, _line(node))
+
+            case "anonymous_function" | "arrow_function":
+                parent = node.parent
+                if parent and parent.type == "assignment_expression" and parent.children:
+                    lhs = parent.children[0]
+                    if lhs.type == "variable_name":
+                        defined_in(_php_var_name(lhs), TYPE_FUNCTION, _line(node))
+
+            # -- Classes / interfaces / traits / enums --------------------
+            case "class_declaration":
+                name = _php_name(node)
                 if not name:
                     continue
-                class_name = name
+                defined_in(name, TYPE_CLASS, _line(node))
+                base_clause = _child_of_type(node, "base_clause")
+                if base_clause:
+                    for target in _php_extends_targets(base_clause):
+                        inherits(name, TYPE_CLASS, target, TYPE_CLASS)
+                iface_clause = _child_of_type(node, "class_interface_clause")
+                if iface_clause:
+                    for target in _php_extends_targets(iface_clause):
+                        inherits(name, TYPE_CLASS, target, TYPE_INTERFACE)
 
-                # Extract base classes (extends)
-                extends_node = _child_of_type(node, "extends_clause")
-                if extends_node:
-                    base_node = _child_of_type(extends_node, "type_name") or _child_of_type(extends_node, "identifier")
-                    if base_node:
-                        triples.append(CodeTriple(
-                            from_entity=class_name,
-                            from_type=TYPE_CLASS,
-                            relation_type=INHERITS,
-                            to_entity=_text(base_node),
-                            to_type=TYPE_CLASS,
-                            source_file=file_path,
-                            line_number=_line(base_node),
-                        ))
+            case "interface_declaration":
+                name = _php_name(node)
+                if not name:
+                    continue
+                defined_in(name, TYPE_INTERFACE, _line(node))
+                base_clause = _child_of_type(node, "base_clause")
+                if base_clause:
+                    for target in _php_extends_targets(base_clause):
+                        inherits(name, TYPE_INTERFACE, target, TYPE_INTERFACE)
 
-            case "function_call":
-                callee = _extract_php_callee(node)
-                if callee and _is_meaningful_callee(callee):
-                    scope = _enclosing_scope(node) # Reuse python-style scope walker for now
-                    caller = scope or module_name
-                    caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
+            case "trait_declaration":
+                name = _php_name(node)
+                if name:
+                    defined_in(name, TYPE_TRAIT, _line(node))
+
+            case "enum_declaration":
+                name = _php_name(node)
+                if not name:
+                    continue
+                defined_in(name, TYPE_ENUM, _line(node))
+                iface_clause = _child_of_type(node, "class_interface_clause")
+                if iface_clause:
+                    for target in _php_extends_targets(iface_clause):
+                        inherits(name, TYPE_ENUM, target, TYPE_INTERFACE)
+
+            case "enum_case":
+                container = _enclosing_php_container(node)
+                name = _php_name(node)
+                if name and container:
+                    container_name, container_type = container
                     triples.append(CodeTriple(
-                        from_entity=caller,
-                        from_type=caller_type,
-                        relation_type=CALLS,
-                        to_entity=callee,
-                        to_type=TYPE_FUNCTION,
+                        from_entity=name,
+                        from_type=TYPE_CONSTANT,
+                        relation_type=DEFINED_IN,
+                        to_entity=container_name,
+                        to_type=container_type,
                         source_file=file_path,
                         line_number=_line(node),
                     ))
 
+            # -- Trait usage inside a class/trait body --------------------
+            case "use_declaration":
+                container = _enclosing_php_container(node)
+                if container:
+                    container_name, container_type = container
+                    for target in _children_of_type(node, "name"):
+                        triples.append(CodeTriple(
+                            from_entity=container_name,
+                            from_type=container_type,
+                            relation_type=INHERITS,
+                            to_entity=_text(target),
+                            to_type=TYPE_TRAIT,
+                            source_file=file_path,
+                            line_number=_line(target),
+                        ))
+
+            # -- Namespace imports -----------------------------------------
+            case "namespace_use_declaration":
+                for dotted, target_node in _extract_php_namespace_use(node):
+                    triples.append(CodeTriple(
+                        from_entity=module_name,
+                        from_type=TYPE_MODULE,
+                        relation_type=IMPORTS,
+                        to_entity=dotted,
+                        to_type=TYPE_MODULE,
+                        source_file=file_path,
+                        line_number=_line(target_node),
+                    ))
+
+            # -- require/include -------------------------------------------
+            case "require_once_expression" | "require_expression" | "include_expression" | "include_once_expression":
+                str_node = _php_include_target(node)
+                if str_node:
+                    triples.append(CodeTriple(
+                        from_entity=module_name,
+                        from_type=TYPE_MODULE,
+                        relation_type=INCLUDES,
+                        to_entity=_php_string_text(str_node),
+                        to_type=TYPE_MODULE,
+                        source_file=file_path,
+                        line_number=_line(str_node),
+                    ))
+
+            # -- Properties / constructor-promoted properties ---------------
+            case "property_declaration":
+                container = _enclosing_php_container(node)
+                if container:
+                    container_name, container_type = container
+                    for element in _children_of_type(node, "property_element"):
+                        var_node = _child_of_type(element, "variable_name")
+                        if var_node:
+                            triples.append(CodeTriple(
+                                from_entity=_php_var_name(var_node),
+                                from_type=TYPE_PROPERTY,
+                                relation_type=DEFINED_IN,
+                                to_entity=container_name,
+                                to_type=container_type,
+                                source_file=file_path,
+                                line_number=_line(var_node),
+                            ))
+
+            case "property_promotion_parameter":
+                container = _enclosing_php_container(node)
+                var_node = _child_of_type(node, "variable_name")
+                if container and var_node:
+                    container_name, container_type = container
+                    triples.append(CodeTriple(
+                        from_entity=_php_var_name(var_node),
+                        from_type=TYPE_PROPERTY,
+                        relation_type=DEFINED_IN,
+                        to_entity=container_name,
+                        to_type=container_type,
+                        source_file=file_path,
+                        line_number=_line(var_node),
+                    ))
+
+            # -- Constants (class/interface/trait/enum or top-level) -------
+            case "const_declaration":
+                container = _enclosing_php_container(node)
+                for element in _children_of_type(node, "const_element"):
+                    name_node = _child_of_type(element, "name")
+                    if not name_node:
+                        continue
+                    to_entity, to_type = container if container else (module_name, TYPE_MODULE)
+                    triples.append(CodeTriple(
+                        from_entity=_text(name_node),
+                        from_type=TYPE_CONSTANT,
+                        relation_type=DEFINED_IN,
+                        to_entity=to_entity,
+                        to_type=to_type,
+                        source_file=file_path,
+                        line_number=_line(name_node),
+                    ))
+
+            # -- Calls -------------------------------------------------------
+            case "function_call_expression":
+                callee_node = _child_of_type(node, "name") or _child_of_type(node, "qualified_name")
+                if callee_node:
+                    calls(_php_basename(callee_node), TYPE_FUNCTION, _line(node), node)
+
+            case "member_call_expression" | "nullsafe_member_call_expression":
+                callee_node = _child_of_type(node, "name")
+                if callee_node:
+                    calls(_text(callee_node), TYPE_FUNCTION, _line(node), node)
+
+            case "scoped_call_expression":
+                names = _children_of_type(node, "name")
+                if names:
+                    calls(_text(names[-1]), TYPE_FUNCTION, _line(node), node)
+
+            case "object_creation_expression":
+                class_node = None
+                for child in node.children:
+                    if child.type in ("name", "qualified_name"):
+                        class_node = child
+                        break
+                if class_node:
+                    basename = _php_basename(class_node)
+                    if basename.lower() not in _PHP_SELF_REFERENTIAL:
+                        calls(basename, TYPE_CLASS, _line(node), node)
+
     return triples
-
-
-def _extract_php_callee(call_node: Node) -> str | None:
-    return _get_node_name(call_node, ["function_name", "identifier"])
 
 # ---------------------------------------------------------------------------
 # JavaScript / TypeScript extraction
@@ -723,6 +1039,7 @@ def _extract_lit_css_tokens(source_text: str, file_path: str) -> list[CodeTriple
 _EXTRACTORS: dict[str, Callable] = {
     ".py":   _extract_python,
     ".js":   _extract_javascript,
+    ".jsx":  _extract_javascript,
     ".ts":   _extract_javascript,
     ".tsx":  _extract_javascript,
     ".html": _extract_html,
