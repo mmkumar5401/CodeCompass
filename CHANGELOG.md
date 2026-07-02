@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.0] - 2026-07-02
+
+### Fixed
+- PHP parsing was silently broken end-to-end: the loader called a nonexistent
+  `tree_sitter_php` attribute, and the extractor matched node types from the
+  wrong grammar version, so every `.php` file produced zero triples. Both are
+  fixed and node types were re-verified against the installed grammar.
+- Python extractor crashed ingestion on any file with a base class due to an
+  undefined variable reference in the class-inheritance extraction path.
+
+### Added
+- Full PHP entity coverage: methods, properties (incl. constructor-promoted),
+  class/interface/enum constants, enum cases, interfaces (multi-extends),
+  traits (+ `use` composition), enums, namespace `use` imports, and
+  `require`/`include`, plus every PHP call form (plain, method, nullsafe,
+  static, `new`).
+- `.jsx` file support in the code parser (`tree-sitter-javascript` already
+  parses JSX; it was just missing from the extension/loader/extractor maps).
+
 ## [2.3.0] - 2026-07-01
 
 ### Added
