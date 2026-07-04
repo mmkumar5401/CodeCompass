@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.5.0] - 2026-07-04
+
+### Added
+- `codecompass describe <repo_path>` — stages entity description work as batch
+  files + `INSTRUCTIONS.md` under `.codecompass/describe/` for an agent swarm
+  to fill in, rather than calling any single vendor's API. Any coding agent
+  (Claude Code, Codex, Gemini, etc.) can dispatch its own native sub-agents
+  against the staged batches, then run `describe --apply` to merge results
+  into the graph and clean up. `ingest-code --describe` stages the same work
+  as an optional Phase 5.
+- `describe --apply` merges staged `batch_*.result.json` files into
+  `.codecompass/graph.json` and removes the staging directory.
+- `describe --force` allows re-staging over an in-progress run; without it,
+  re-running `describe` while unmerged results exist raises an error instead
+  of silently discarding them.
+- AGENTS.md registration now includes an explicit "user-triggered ONLY" rule
+  so agents don't run `describe` automatically after routine re-ingests.
+
+### Changed
+- `.codecompass/graph.json` is no longer gitignored — descriptions and graph
+  structure are now committed so teams share the same enriched graph.
+  `.codecompass/describe/` (transient staging) is gitignored instead.
+
 ## [2.4.0] - 2026-07-02
 
 ### Fixed

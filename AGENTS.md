@@ -96,4 +96,16 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 - After adding, renaming, or deleting source files
 - After major refactors (moved functions, renamed classes)
 - If query results look stale or incomplete
+
+### Description enrichment — user-triggered ONLY
+
+`codecompass describe` (and `ingest-code --describe`) stage entity descriptions
+for an agent swarm to fill in (see `.codecompass/describe/INSTRUCTIONS.md` when
+staged). This is expensive and **must only run when the user explicitly asks**
+for descriptions to be added or refreshed (e.g. "describe this codebase",
+"add descriptions", "enrich the graph").
+
+**Do NOT run `describe` automatically** after re-ingesting, editing files, or
+any other routine step — routine re-ingestion is `codecompass ingest-code`
+with no `--describe` flag.
 <!-- codecompass-code-graph-end -->
