@@ -1,304 +1,198 @@
 # CodeCompass
 
-A local code knowledge graph that gives AI agents (and humans) a map of your codebase — so they know what's connected before they edit.
+A local code knowledge graph that gives AI agents a map of your codebase — so they navigate by structure instead of grepping blind, and know what's connected before they edit.
+
+No database. No cloud. One JSON file per repo. Python, JavaScript/TypeScript, PHP, HTML/CSS.
 
 ---
 
-## The problem
+## Why it's faster
 
-AI coding agents read files one at a time. They don't know that renaming a function in `auth.py` will break three importers, a test file, and a CSS class that shares the name. They guess which files to open, miss dependencies, and introduce bugs.
+AI agents read files one at a time and grep to find their way. On a real task that means opening candidate after candidate to answer "who calls this?" or "what breaks if I change this?" CodeCompass answers those from a precomputed graph, so the agent reads *only the code it actually needs*.
 
-## The solution
+We benchmarked it against traditional grep/read on six standard tasks (impact, blast radius, dead code, flow trace, find-and-edit, feature scoping) across four real repos, measuring **tokens to a verified answer** — the query output *plus* the code still read to trust it.
 
-CodeCompass parses your codebase into a dependency graph — functions, classes, modules, imports, CSS selectors, HTML references — and stores it as a local JSON file. Agents query the graph before editing to see exactly what's connected.
+```
+Tokens to a verified answer  ·  lower is better  ·  same tasks, same targets
 
-No database. No cloud. One JSON file per repo.
+psf/requests · Python
+  codecompass  ██████ 1,290
+  grep / read  █████████████████ 3,875                             −67%
 
----
+pallets/click · Python
+  codecompass  ███████ 1,669
+  grep / read  ████████████████████████████████████████ 9,338     −82%
 
-## In practice
+guzzlehttp/guzzle · PHP
+  codecompass  ███████ 1,707
+  grep / read  █████████████████████ 4,985                         −66%
 
-**Scenario 1 — Safe rename.** An agent is asked to rename `authenticate`. Instead of
-grepping and hoping, it runs `codecompass query --blast-radius src/auth/login.py`
-and instantly sees the three importers, the test file, and a SCSS selector that
-share the name — then edits all of them in one pass, no broken build.
-
-**Scenario 2 — Onboarding onto an unfamiliar pipeline.** A new contributor (human or
-agent) needs to understand how `ingest_code` works. Running
-`codecompass query --flow ingest_code` traces the full forward call graph — which
-parser runs, where the graph gets written, what normalizes the triples — in one
-command, instead of opening a dozen files to follow the thread:
-
-![Flow trace of ingest_code](docs/flow-example.svg)
-
-The `json` flow format hands each node its real signature, docstring, and source
-snippet, plus the numbered call order, so an agent can narrate the whole data
-flow from that single query instead of opening a dozen files.
-
----
-
-## What you get
-
-Every node in the graph carries:
-- **`kind`** — type and language combined (e.g. `function:python`, `class:typescript`, `css_selector:scss`)
-- **`description`** — human-readable label (e.g. `python function in src/auth/login.py`)
-- **Typed edges** — `CALLS`, `IMPORTS`, `INHERITS`, `DEFINED_IN`, `STYLES`, `USES_VAR`, `REFERENCES`, etc.
-
-Agents can answer structural questions in milliseconds without reading a single file:
-
-```bash
-# What breaks if I edit this?
-codecompass query --blast-radius src/auth/login.py
-
-# Who calls this function?
-codecompass query --impact "authenticate"
-
-# What does this file depend on?
-codecompass query --deps src/api/routes.py
-
-# Full project structure with entity types
-codecompass query --tree
+expressjs/express · JavaScript
+  codecompass  ███████ 1,526
+  grep / read  █████████████████████████████████████ 8,575         −82%
 ```
 
-All commands default to the current directory.
+CodeCompass wins every relational and discovery task; grep only holds even on a
+plain textual find of a known string. The advantage grows with codebase size and
+name collisions. Full breakdown, per-task numbers, and honest limitations in
+**[docs/benchmark-results.md](docs/benchmark-results.md)**.
 
 ---
 
-## Setup
+## The workflow
 
-### Prerequisites
+The graph turns navigation into a cheap, deterministic loop:
 
-- Python 3.10+
-- pip
+**discover → trace → read → edit**
 
-### Install
+1. **Discover** — find the symbols you care about without opening files:
+
+   | You have… | Use |
+   |---|---|
+   | a feature request that names a concept ("session timeout") | `grep` the concept |
+   | a regex / name pattern | `grep` |
+   | keywords | `search` |
+   | a vague, nameless need | `map` (compact index to reason over) |
+
+2. **Trace** — a relationship around a known symbol/file:
+
+   | Question | Use |
+   |---|---|
+   | who calls / would break if I change this? | `impact` |
+   | what files are affected if I edit this file? | `blast_radius` |
+   | what does this file depend on? | `deps` |
+   | what does this entry point call, step by step? | `flow` |
+   | explain a flow to a human (diagram + narration) | `flow_summary` |
+   | anything unused? | `dead_code` |
+
+3. **Read** the specific slice the graph points to (`impact` gives `file:line`).
+4. **Edit** — check `impact`/`blast_radius` first so you don't miss a caller.
+
+---
+
+## What makes it accurate
+
+- **Precise call graph.** Nodes are file- *and* class-qualified, so
+  `Command.invoke` and `Context.invoke` (same file) stay distinct, and
+  `impact` returns the callers of a *specific* method — no same-named
+  look-alikes, no test noise.
+- **Receiver-type resolution.** `self.send()` resolves to the enclosing class;
+  `x = new Adapter()` / `x: Adapter` / `x = make()` (with a return type) resolve
+  by type. Calls that can't be typed statically (dynamic dispatch) are
+  **surfaced flagged `resolved: false`** — never dropped, never claimed precise.
+- **Line-anchored.** Every `impact` caller carries its real call-site
+  `file:line`, so verification reads a few lines, not a whole function.
+
+---
+
+## Install
 
 ```bash
 pip install codecompass-mcp
 ```
 
-This gives you:
-- the `codecompass` CLI
-- the `codecompass-mcp` MCP server binary
-
-### Connect to an MCP client
-
-The server speaks stdio MCP. It defaults to the process's current working directory, so if the client starts it inside a project it just works. To query a different project, the agent calls `set_repo`.
-
-**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
-
-```json
-{
-  "mcpServers": {
-    "codecompass": {
-      "command": "codecompass-mcp"
-    }
-  }
-}
-```
-
-**Cline / Cursor / other clients** — add a server with command `codecompass-mcp`.
-
-Then ask the agent to run:
-
-```
-Use the codecompass MCP server. If you need to switch projects, set_repo to /path/to/project, then query ...
-```
-
-If you prefer a fixed default repo, set `CODECOMPASS_REPO=/path/to/project` in the MCP server environment. The server auto-initializes `.codecompass/` if missing. Call the `ingest()` tool from the agent to keep the graph up to date, or run `codecompass ingest-code` inside the project first.
+Gives you the `codecompass` CLI and the `codecompass-mcp` MCP server.
 
 ### Index a project
 
 ```bash
 cd /path/to/your/project
-codecompass init
-codecompass ingest-code
+codecompass init          # creates .codecompass/, writes AGENTS.md
+codecompass ingest-code   # parses source and builds the graph
 ```
 
-That's it. Two commands:
-1. **`init`** creates `.codecompass/` and writes agent instructions into `AGENTS.md`
-2. **`ingest-code`** parses all source files and builds the graph
+`ingest-code` runs `init` automatically if needed. Re-ingest after refactors (or run `codecompass watch` to keep the graph live).
 
-`ingest-code` runs `init` automatically if `.codecompass/` doesn't exist yet.
+### Connect an MCP client
 
-### What happens on init
+The server speaks stdio MCP and defaults to the working directory.
 
-- Creates `.codecompass/` with `graph.json`, `overview.md`, `memory.md`, and `learnings.md`
-- Writes a `## Code graph` section into the project's `AGENTS.md` with mandatory rules for agents:
-  - Run `--blast-radius` before editing any file
-  - Run `--impact` before calling unfamiliar symbols
-  - Re-ingest after any code change
-- Installs the Claude Code `PreToolUse` guardrail into `.claude/` (see
-  [Hard enforcement](#hard-enforcement-for-claude-code--pi-optional) below)
+**Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) / `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 
-Any AI agent that reads `AGENTS.md` (Claude Code, OpenCode, Cursor, etc.) will follow these rules automatically.
+```json
+{ "mcpServers": { "codecompass": { "command": "codecompass-mcp" } } }
+```
+
+**Cline / Cursor / other** — add a server with command `codecompass-mcp`. To query a different repo, the agent calls `set_repo`, or set `CODECOMPASS_REPO=/path/to/project` in the server env.
 
 ---
 
-## Hard enforcement for Claude Code & Pi (optional)
-
-`AGENTS.md` is an instruction — a well-behaved agent follows it, but nothing
-stops it from reaching for `grep`/`cat` out of habit. If you want that
-actually blocked instead of just discouraged, both Claude Code and
-[pi](https://pi.dev) support hard tool-call enforcement via hooks/extensions.
-
-The block only covers what codecompass unambiguously replaces — searching or
-reading code content (`Grep`/`Glob` tools, `cat`/`grep`/`rg`/`sed`/`awk`/`head`/`tail`/`less`
-inside `Bash`). `ls`/`find` are left alone; they have legitimate non-code uses
-(checking build output, confirming a generated file exists, listing fixtures)
-that the graph doesn't cover.
-
-### Claude Code
-
-`codecompass init` installs this automatically — no manual setup needed. It
-writes `.claude/hooks/block-file-search.py` and merges the required
-`PreToolUse` matchers (`Bash`, `Grep`, `Glob`) into `.claude/settings.json`,
-without clobbering any hooks you've already configured. The hook reads the
-tool call from stdin, blocks matches (exit code `2`, with the reason printed
-to stderr so Claude sees it and redirects to codecompass), and allows
-everything else. Start a new Claude Code session in the repo and accept the
-trust prompt — hooks execute shell commands, so Claude Code asks first.
-
-### Pi
-
-Two files:
-
-- `.pi/APPEND_SYSTEM.md` — appended to the system prompt every session,
-  stating the codecompass-first rule plus the graph-vs-`ls` decision rule.
-- `.pi/extensions/codecompass-guard.ts` — a `tool_call` handler that blocks
-  the `grep` tool and `cat`/`grep`/`rg` inside `bash`.
-
-### Activating
-
-Neither of these hot-reload into an already-running session:
-
-- **Claude Code** — start a new session in the repo; accept the trust prompt
-  (hooks execute shell commands, so Claude Code asks first).
-- **Pi** — project-local `.pi/` resources only load after the project is
-  trusted. Accept the trust prompt on startup, or run `/trust` and restart
-  `pi` once.
-
-After that one-time trust, both pick the files up automatically on every
-future session in the repo — nothing to re-inject manually.
-
----
-
-## Queries
-
-| Command | When to use it |
-|---|---|
-| `codecompass query --blast-radius <file_or_symbol>` | Before editing — see everything that depends on it |
-| `codecompass query --impact <symbol>` | Before renaming/removing — find all callers and importers |
-| `codecompass query --deps <file>` | Understanding a file — see what it imports and uses |
-| `codecompass query --trace <function>` | Follow a call chain forward |
-| `codecompass query --tree` | Orient yourself — full project structure |
-| `codecompass query --styles <element>` | Find CSS selectors for an HTML element |
-| `codecompass query --batch-impact <f1> <f2> ...` | Multi-file PR — union blast radius |
-| `codecompass query --flow <entry_symbol>` | Trace the call/import flow from an entry point |
-| `codecompass query --dead-code` | Find functions/classes with no caller or importer |
-
-Add `--rich` for formatted table output. Add `--hops N` to control traversal depth (default: 3).
-
-### Dead code
-
-`--dead-code` reports entities with no inbound `CALLS`/`IMPORTS`/`REFERENCES` edge — candidates for removal such as old helpers, superseded function versions, or orphaned scripts:
+## Queries (CLI)
 
 ```bash
-codecompass query --dead-code                      # likely-dead only
-codecompass query --dead-code --include-entrypoints  # also show probable entry points
+# discover
+codecompass query --grep "^get_"            # regex over graph entities
+codecompass query --search "session cookie" # keyword search
+codecompass query --map                     # compact {file: [symbols]} index
+
+# trace
+codecompass query --impact "Session.send"   # callers (disambiguated), with file:line
+codecompass query --blast-radius src/app.py  # what depends on this file
+codecompass query --deps src/api/routes.py   # what this file imports
+codecompass query --flow "Session.request"   # lean call-flow structure
+codecompass query --flow-summary "main"      # flow + mermaid + narration
+codecompass query --dead-code                # unreferenced candidates
+codecompass query --tree                     # full hierarchy
 ```
 
-Results are split into **likely dead** (private/internal, no caller) and **possible entry points** (`run_*`, handlers, tests — invoked by a runtime, not a static call). This is **static analysis**: dynamic dispatch, reflection, and string-based invocation are invisible, so every result is a candidate to verify (grep the name across the repo) before deleting.
+Add `--hops N` for traversal depth (start at 1 and follow the one path you need). Add `--rich` for tables.
 
-### Flow charts
+### Flow: `flow` vs `flow-summary`
 
-`--flow` traces forward from an entry point along `CALLS` and `IMPORTS` edges. Pick an output format with `--format`:
-
-```bash
-codecompass query --flow "src.main" --hops 3                    # draw.io (default)
-codecompass query --flow "src.main" --format mermaid           # Markdown + mermaid
-codecompass query --flow "src.main" --format json              # agent narration
-```
-
-Every format numbers each call by source line so call order is explicit. By default, external/stdlib symbols are filtered out — add `--include-external` to show everything. Output is written to `.codecompass/flow_<entry>.{drawio,md,json}`.
-
-- **`drawio`** — opens in [draw.io](https://app.diagrams.net) (desktop or web). Nodes color-coded by type, entry point has a thick border, edges color-coded by relationship (blue = CALLS, green = IMPORTS).
-- **`mermaid`** — a Markdown file with an embedded mermaid flowchart that renders directly on GitHub. Convert to SVG with `npx @mermaid-js/mermaid-cli -i flow_<entry>.md -o flow_<entry>.svg`.
-- **`json`** — each node carries its real signature, docstring, source snippet, and line range; each edge carries its call order and call site. Built for agents: feed it to an LLM to generate a comprehensive data-flow explanation of how a pipeline or feature actually works.
+- **`flow`** — lean structure only (node name/kind/file/depth, edge from/to/order/line). What an agent needs to navigate; no embedded source.
+- **`flow-summary`** — the trace rendered for a human: a mermaid flowchart with prose narration (`--format mermaid`, default), or source-embedded JSON (`--format json`), or a draw.io diagram (`--format drawio`). Written to `.codecompass/flow_<entry>.*`.
 
 ---
 
-## Commands
+## MCP tools
 
-| Command | Purpose |
+| Tool | Returns |
 |---|---|
-| `codecompass init [path]` | Create `.codecompass/` and register in `AGENTS.md` |
-| `codecompass ingest-code [path] [--normalize] [--dump-triples <out.json>] [--describe]` | Parse source files and build/rebuild the graph |
-| `codecompass describe [path] [--batch-size N] [--force] [--apply]` | Stage entity descriptions for an agent swarm to fill in, then merge results back into the graph |
-| `codecompass query <flags> [path]` | Query the graph (blast-radius, impact, deps, flow, tree, etc.) |
-| `codecompass watch [path]` | Live re-index on file changes |
-| `codecompass load-triples <file> <path>` | Load pre-processed triples from JSON |
-| `codecompass mcp [path]` | Run the MCP server, defaulting to the given repo |
-| `codecompass setup` | Copy instructions to `~/.config/opencode/codecompass/` |
-
-All commands default to `.` (current directory) when path is omitted.
-
-`--describe` (on `ingest-code`) and the standalone `describe` command are
-**user-triggered only** — expensive, and not something an agent should run
-automatically after a routine edit or re-ingest.
-
----
-
-## MCP server
-
-CodeCompass also runs as an MCP server so compatible clients can call graph queries as tools instead of parsing CLI output.
-
-### Run the server
-
-```bash
-# Serve the current directory's graph over stdio (default MCP transport)
-codecompass-mcp
-
-# Serve a specific repo
-CODECOMPASS_REPO=/path/to/repo codecompass-mcp
-
-# Or use the CLI subcommand
-codecompass mcp /path/to/repo
-```
-
-### Available tools
-
-| Tool | What it returns |
-|---|---|
-| `set_repo(repo_path)` | Select the project to query (defaults to cwd) |
-| `get_repo()` | The currently selected project |
-| `init()` | Create `.codecompass/` and write `AGENTS.md` |
-| `ingest()` | Re-index the repo |
-| `blast_radius(target, hops=3)` | Files reachable from a file or symbol |
-| `batch_impact(targets, hops=3)` | Union of blast radii for multiple targets |
-| `impact(symbol, hops=3)` | Callers and importers of a symbol |
-| `deps(file_path, hops=3)` | What a file imports or depends on |
-| `trace(symbol, hops=3)` | Forward call chain from a symbol |
+| `grep(pattern, field, ignore_case)` | Regex search over graph entities |
+| `search(query, kind)` | Keyword search, ranked |
+| `map(include_tests)` | Compact `{file: [symbols]}` index |
+| `impact(symbol, hops)` | Callers/importers, disambiguated, with `resolved` + `line` |
+| `blast_radius(target, hops)` | Files reachable from a file or symbol |
+| `batch_impact(targets, hops)` | Union of blast radii for a multi-file change |
+| `deps(file_path, hops)` | What a file imports |
+| `flow(entry_symbol, hops)` | Lean call/import flow structure |
+| `flow_summary(entry_symbol, hops, format)` | Flow + narration (mermaid/json/drawio) |
+| `trace(symbol, hops)` | Forward call chain |
+| `dead_code(include_entrypoints)` | Entities with no inbound caller |
 | `styles(element)` | CSS selectors that style an element |
-| `flow(entry_symbol, hops=3, format="json", include_external=False)` | Call/import flow trace (json, mermaid, or drawio) |
-| `dead_code(include_entrypoints=False)` | Entities with no inbound caller |
 | `tree()` | Full project hierarchy |
-
-Configure your MCP client (Claude Desktop, Cline, etc.) to run `codecompass-mcp` in the repo you want to query.
+| `set_repo` / `get_repo` / `init` / `ingest` | Project selection & indexing |
 
 ---
 
 ## Supported languages
 
-| Language | Entity types extracted |
+| Language | Extracted |
 |---|---|
-| Python | modules, functions, classes, imports, calls, inheritance |
-| JavaScript | modules, functions, classes, imports, calls |
-| TypeScript / TSX | modules, functions, classes, imports, calls |
+| Python | functions, classes, imports, calls, inheritance, receiver/return-type inference, `__all__`/public exports |
+| JavaScript / JSX | functions, classes, `require`/`import`, calls, receiver/return-type inference, `module.exports`/`export` |
+| TypeScript / TSX | as JS, plus type annotations for receiver resolution |
+| PHP | functions, classes, methods, calls, receiver/return-type inference, `public`/`private`/`protected` visibility |
 | HTML | elements, references, includes |
-| CSS | selectors, variables, definitions |
-| SCSS | selectors, variables, mixins, imports |
-| `.styles.ts` (Lit) | CSS-in-JS — `var(--token)` usages, `:host` declarations |
+| CSS / SCSS | selectors, variables, `@import`/`@use` |
+| `.styles.ts` (Lit) | CSS-in-JS `var(--token)` usages and `:host` declarations |
+
+Receiver capture, type inference, and export/visibility awareness apply to all
+call-based languages (JS/TS, Python, PHP). Node de-merge and the discovery tools
+are language-agnostic.
+
+---
+
+## Navigation guardrail (optional, installed by `init`)
+
+`AGENTS.md` guides any agent through the discover→trace→read→edit loop. For
+Claude Code and [pi](https://pi.dev), `init` also installs a `PreToolUse` hook
+that **blocks code *search*** (`grep`/`rg`, the `Grep`/`Glob` tools) and
+**whole-file `cat`**, routing discovery through the graph — while leaving
+**targeted reads free** (the `Read` tool, `sed -n`, `head`/`tail`). The point is
+to change the default reflex to graph-first, not to remove reads. Both pick the
+files up after a one-time trust prompt (they execute shell commands). The hook
+is a plain file under `.claude/hooks/` — edit or delete it to adjust.
 
 ---
 
@@ -306,78 +200,31 @@ Configure your MCP client (Claude Desktop, Cline, etc.) to run `codecompass-mcp`
 
 ```
 Source files
-    │
-    ▼
-hierarchy_builder    — walks repo → Project / Folder / File skeleton
-    │
-    ▼
-code_parser          — tree-sitter extraction (no API calls)
-    │                  extracts entities + relationships as CodeTriples
-    ▼
-graph.json           — NetworkX MultiDiGraph serialized as JSON node-link data
-    │                  typed edges: CALLS, IMPORTS, INHERITS, STYLES, DEFINED_IN, …
-    │                  node attrs: kind, description, language, entity_type, file
-    ▼
-code_query_cli       — graph traversal: blast-radius, impact, deps, trace, tree
-    │
-    ▼
-AGENTS.md            — mandatory rules injected into the project for any AI agent
+   ▼  hierarchy_builder   walks repo → Project / Folder / File skeleton
+   ▼  code_parser         tree-sitter extraction (no API calls) → typed CodeTriples
+   ▼  graph.json          NetworkX MultiDiGraph as JSON; file+class-qualified nodes,
+                          typed edges (CALLS/IMPORTS/INHERITS/STYLES/…), resolved calls
+   ▼  code_query_cli      traversal: grep / search / map / impact / blast-radius /
+                          deps / flow / dead-code / tree
 ```
 
-Everything runs locally, in-process. No network calls, no database, no API keys.
-
----
-
-## Project structure
-
-```
-codecompass/
-├── graph/
-│   ├── cli.py                  pip entry point → main.py
-│   ├── code_graph_client.py    NetworkX graph client — nodes, edges, traversal
-│   ├── code_query_cli.py       query CLI — blast-radius / impact / deps / trace / tree / dead-code / flow
-│   └── setup.py                opencode setup wizard
-├── ingestion/
-│   ├── code_parser.py          tree-sitter entity + relationship extraction
-│   ├── hierarchy_builder.py    Project → Folder → File skeleton
-│   ├── file_watcher.py         incremental re-index on file changes
-│   ├── code_normalizer.py      optional entity name normalization (Haiku)
-│   └── description_enricher.py agent-swarm description staging/apply (describe)
-├── models/
-│   └── code_types.py           CodeTriple, FileNode, FolderNode
-├── opencode/
-│   └── instructions.md         agent instructions for opencode integration
-├── config.py                   env var config with fallback defaults
-├── main.py                     CLI dispatch: init / ingest-code / describe / query / watch / mcp
-└── mcp_server.py               FastMCP server exposing the same queries as tools
-```
+Everything runs locally, in-process. No network, no database, no API keys.
 
 Inside each indexed project:
 
 ```
 your-project/
-├── .codecompass/
-│   ├── graph.json              the code knowledge graph (auto-generated)
-│   ├── overview.md             what the repo is / how to run it (read first)
-│   ├── memory.md               architecture & data flow (human-editable)
-│   └── learnings.md            gotchas, decisions, dead code (human-editable)
-└── AGENTS.md                   agent instructions (auto-updated by codecompass)
+├── .codecompass/graph.json   the code knowledge graph (auto-generated)
+└── AGENTS.md                 discovery guide for agents (auto-updated)
 ```
-
----
-
-## Tips
-
-- **Commit or gitignore** `.codecompass/graph.json` — your choice. Committing it means teammates and CI get the graph for free.
-- **Re-ingest after refactors** — moved functions, renamed classes, deleted files. The graph doesn't auto-update unless `watch` is running.
-- **Use `watch` during active development** — `codecompass watch` keeps the graph current as you save files.
-- **Install once, use everywhere** — `pip install -e .` from the codecompass directory. The `codecompass` command works in any project.
 
 ---
 
 ## Limitations
 
-- **Structure only** — the graph knows what calls what, not what anything *means*
-- **No cross-repo edges** — entities outside the indexed repo won't appear
-- **Lit CSS** covers explicit `var(--foo)` and `:host` declarations; generated property names from `theme.props()` are not indexed
-- **Large repos** (50k+ files) may produce sizable graph files — benchmark before committing
+- **Structure, not semantics** — the graph knows what calls what, not what it means.
+- **Static analysis** — dynamic dispatch, reflection, and string-based invocation
+  can't be fully resolved. `impact` surfaces those flagged `resolved: false`, and
+  `dead_code` results are always candidates to verify.
+- **No cross-repo edges** — entities outside the indexed repo don't appear.
+- **Re-ingest after refactors** — the graph doesn't auto-update unless `watch` is running.
