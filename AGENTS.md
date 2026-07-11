@@ -11,6 +11,11 @@ All commands default to the current directory — run them from the project root
 
 ### Rules — MUST follow
 
+0. **Never use `cat`, `grep`, or `rg` to search or read code content.**
+   Use the `codecompass query` commands below to find entities, structure, and
+   relationships instead — they know the real dependency graph; grepping does
+   not. Only `read` a specific file once codecompass has told you it matters.
+   `ls`/`find` are fine for non-code exploration — see the decision rule below.
 1. **Before editing any file**, run `--blast-radius` on it to see what depends on it:
    ```bash
    codecompass query --blast-radius <file_or_symbol>
@@ -26,6 +31,19 @@ All commands default to the current directory — run them from the project root
    ```
 4. **Never skip step 1.** Reading a file without checking its blast radius first
    means you may miss callers, importers, or CSS/HTML dependents.
+
+### Graph vs. `ls`/`find` — how to decide
+
+Use **codecompass** when the question is about code structure or relationships:
+"what calls this", "what depends on this file", "what does this module do",
+"how does this flow work", "is this dead code". The graph knows the real
+dependency edges; a directory listing does not.
+
+Use **`ls`/`find`** when the question has nothing to do with code
+relationships: confirming a generated/output file exists, listing a
+build/dist/log directory, checking test fixtures or assets, or any path the
+graph doesn't index. These are fine — don't force codecompass onto questions
+it can't answer.
 
 ### Available queries
 

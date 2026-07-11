@@ -95,6 +95,35 @@ All commands default to the current directory.
 pip install codecompass-mcp
 ```
 
+This gives you:
+- the `codecompass` CLI
+- the `codecompass-mcp` MCP server binary
+
+### Connect to an MCP client
+
+The server speaks stdio MCP. It defaults to the process's current working directory, so if the client starts it inside a project it just works. To query a different project, the agent calls `set_repo`.
+
+**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "codecompass": {
+      "command": "codecompass-mcp"
+    }
+  }
+}
+```
+
+**Cline / Cursor / other clients** — add a server with command `codecompass-mcp`.
+
+Then ask the agent to run:
+
+```
+Use the codecompass MCP server. If you need to switch projects, set_repo to /path/to/project, then query ...
+```
+
+If you prefer a fixed default repo, set `CODECOMPASS_REPO=/path/to/project` in the MCP server environment. The server auto-initializes `.codecompass/` if missing. Call the `ingest()` tool from the agent to keep the graph up to date, or run `codecompass ingest-code` inside the project first.
 
 ### Index a project
 
@@ -119,6 +148,65 @@ That's it. Two commands:
   - Re-ingest after creating or deleting files
 
 Any AI agent that reads `AGENTS.md` (Claude Code, OpenCode, Cursor, etc.) will follow these rules automatically.
+
+---
+
+## Hard enforcement for Claude Code & Pi (optional)
+
+`AGENTS.md` is an instruction — a well-behaved agent follows it, but nothing
+stops it from reaching for `grep`/`cat` out of habit. If you want that
+actually blocked instead of just discouraged, both Claude Code and
+[pi](https://pi.dev) support hard tool-call enforcement via hooks/extensions.
+
+The block only covers what codecompass unambiguously replaces — searching or
+reading code content (`grep`, `rg`, `cat`, the `Grep` tool). `ls`/`find` are
+left alone; they have legitimate non-code uses (checking build output,
+confirming a generated file exists, listing fixtures) that the graph doesn't
+cover. Guide that judgment call with a decision-rule note in your agent
+instructions rather than blocking it — see the `AGENTS.md` this tool
+generates for the exact wording.
+
+### Claude Code
+
+Add a `PreToolUse` hook in `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "python3 .claude/hooks/block-file-search.py" }] },
+      { "matcher": "Grep", "hooks": [{ "type": "command", "command": "python3 .claude/hooks/block-file-search.py" }] }
+    ]
+  }
+}
+```
+
+`.claude/hooks/block-file-search.py` reads the tool call from stdin, blocks
+`Grep` and `cat`/`grep`/`rg` inside `Bash` (exit code `2`, with the reason
+printed to stderr so Claude sees it and redirects to codecompass), and
+allows everything else.
+
+### Pi
+
+Two files:
+
+- `.pi/APPEND_SYSTEM.md` — appended to the system prompt every session,
+  stating the codecompass-first rule plus the graph-vs-`ls` decision rule.
+- `.pi/extensions/codecompass-guard.ts` — a `tool_call` handler that blocks
+  the `grep` tool and `cat`/`grep`/`rg` inside `bash`.
+
+### Activating
+
+Neither of these hot-reload into an already-running session:
+
+- **Claude Code** — start a new session in the repo; accept the trust prompt
+  (hooks execute shell commands, so Claude Code asks first).
+- **Pi** — project-local `.pi/` resources only load after the project is
+  trusted. Accept the trust prompt on startup, or run `/trust` and restart
+  `pi` once.
+
+After that one-time trust, both pick the files up automatically on every
+future session in the repo — nothing to re-inject manually.
 
 ---
 
@@ -179,6 +267,45 @@ Every format numbers each call by source line so call order is explicit. By defa
 | `codecompass setup` | Copy instructions to `~/.config/opencode/codecompass/` |
 
 All commands default to `.` (current directory) when path is omitted.
+
+---
+
+## MCP server
+
+CodeCompass also runs as an MCP server so compatible clients can call graph queries as tools instead of parsing CLI output.
+
+### Run the server
+
+```bash
+# Serve the current directory's graph over stdio (default MCP transport)
+codecompass-mcp
+
+# Serve a specific repo
+CODECOMPASS_REPO=/path/to/repo codecompass-mcp
+
+# Or use the CLI subcommand
+codecompass mcp /path/to/repo
+```
+
+### Available tools
+
+| Tool | What it returns |
+|---|---|
+| `set_repo(repo_path)` | Select the project to query (defaults to cwd) |
+| `get_repo()` | The currently selected project |
+| `init()` | Create `.codecompass/` and write `AGENTS.md` |
+| `ingest()` | Re-index the repo |
+| `blast_radius(target, hops=3)` | Files reachable from a file or symbol |
+| `batch_impact(targets, hops=3)` | Union of blast radii for multiple targets |
+| `impact(symbol, hops=3)` | Callers and importers of a symbol |
+| `deps(file_path, hops=3)` | What a file imports or depends on |
+| `trace(symbol, hops=3)` | Forward call chain from a symbol |
+| `styles(element)` | CSS selectors that style an element |
+| `flow(entry_symbol, hops=3, format="json", include_external=False)` | Call/import flow trace (json, mermaid, or drawio) |
+| `dead_code(include_entrypoints=False)` | Entities with no inbound caller |
+| `tree()` | Full project hierarchy |
+
+Configure your MCP client (Claude Desktop, Cline, etc.) to run `codecompass-mcp` in the repo you want to query.
 
 ---
 

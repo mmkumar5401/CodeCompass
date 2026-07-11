@@ -36,6 +36,195 @@ DEFAULT_HOPS = 3
 STALE_WARN_HOURS = 24
 
 
+# ---------------------------------------------------------------------------
+# Data-fetch helpers (used by CLI and MCP server)
+# ---------------------------------------------------------------------------
+
+def fetch_impact(entity_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
+    """Return callers of entity_name as structured data."""
+    client = get_client(repo_path)
+    try:
+        rows = client.find_callers(entity_name, project, max_hops)
+        updated_at = _entity_updated_at(client, entity_name)
+    finally:
+        client.close()
+    return {"entity": entity_name, "callers": rows, "updated_at": updated_at}
+
+
+def fetch_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
+    """Return what file_path imports as structured data."""
+    client = get_client(repo_path)
+    try:
+        rows = client.find_dependencies(file_path, project, max_hops)
+        updated_at = client.get_file_updated_at(file_path, project)
+    finally:
+        client.close()
+    return {"file": file_path, "dependencies": rows, "updated_at": updated_at}
+
+
+def fetch_styles(element_name: str, repo_path: str, project: str) -> dict:
+    """Return CSS selectors that style element_name as structured data."""
+    client = get_client(repo_path)
+    try:
+        rows = client.find_styles(element_name, project)
+        updated_at = _entity_updated_at(client, element_name)
+    finally:
+        client.close()
+    return {"element": element_name, "selectors": rows, "updated_at": updated_at}
+
+
+def fetch_trace(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
+    """Return forward call chain from start_name as structured data."""
+    client = get_client(repo_path)
+    try:
+        rows = client.trace_calls(start_name, project, max_hops)
+        updated_at = _entity_updated_at(client, start_name)
+    finally:
+        client.close()
+    return {"entity": start_name, "calls": rows, "updated_at": updated_at}
+
+
+def fetch_blast_radius(target: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
+    """Return blast radius of target as structured data."""
+    client = get_client(repo_path)
+    try:
+        rows, target_file = client.get_blast_radius(target, project, max_hops)
+        updated_at = client.get_file_updated_at(target_file, project) if target_file else None
+    finally:
+        client.close()
+
+    if target_file is None:
+        return {"target": target, "found": False, "files": [], "updated_at": None}
+
+    seen: dict[str, dict] = {}
+    for row in rows:
+        f = row["file"]
+        if f not in seen or row["hops"] < seen[f]["hops"]:
+            seen[f] = row
+
+    if target_file not in seen:
+        seen[target_file] = {"file": target_file, "edge_type": "self", "hops": 0}
+
+    deduped = sorted(seen.values(), key=lambda r: (r["hops"], r["file"]))
+    return {
+        "target": target,
+        "target_file": target_file,
+        "found": True,
+        "files": deduped,
+        "updated_at": updated_at,
+    }
+
+
+def fetch_batch_impact(targets: list[str], repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
+    """Return union of blast radii across multiple targets as structured data."""
+    flat_targets: list[str] = []
+    for t in targets:
+        flat_targets.extend(s.strip() for s in t.split(",") if s.strip())
+
+    input_set = set(flat_targets)
+    client = get_client(repo_path)
+    try:
+        merged: dict[str, dict] = {}
+        resolved: list[str] = []
+        staleness_ts: str | None = None
+
+        for target in flat_targets:
+            rows, target_file = client.get_blast_radius(target, project, max_hops)
+            if target_file is None:
+                continue
+            resolved.append(target)
+            if staleness_ts is None:
+                staleness_ts = client.get_file_updated_at(target_file, project)
+
+            all_rows = list(rows)
+            if not any(r["file"] == target_file for r in all_rows):
+                all_rows.append({"file": target_file, "edge_type": "self", "hops": 0})
+
+            for row in all_rows:
+                f = row["file"]
+                h = row["hops"]
+                if f not in merged:
+                    merged[f] = {"hops": h, "via": {target}}
+                else:
+                    if h < merged[f]["hops"]:
+                        merged[f]["hops"] = h
+                    merged[f]["via"].add(target)
+    finally:
+        client.close()
+
+    deduped = sorted(
+        [{"file": f, "hops": v["hops"], "via": sorted(v["via"])} for f, v in merged.items()],
+        key=lambda r: (r["hops"], r["file"]),
+    )
+    return {
+        "targets": flat_targets,
+        "resolved": resolved,
+        "not_found": [t for t in flat_targets if t not in resolved],
+        "files": deduped,
+        "updated_at": staleness_ts,
+    }
+
+
+def fetch_dead_code(repo_path: str, project: str, show_entrypoints: bool = False) -> dict:
+    """Return dead-code candidates as structured data."""
+    client = get_client(repo_path)
+    try:
+        result = client.find_dead_code(project)
+    finally:
+        client.close()
+    return {
+        "project": project,
+        "dead": result["dead"],
+        "maybe_entrypoint": result["maybe_entrypoint"] if show_entrypoints else [],
+        "show_entrypoints": show_entrypoints,
+    }
+
+
+def fetch_tree(repo_path: str, project: str) -> dict:
+    """Return project hierarchy as structured data."""
+    client = get_client(repo_path)
+    try:
+        rows = client.get_project_tree(project)
+        last_ingested = client.get_project_last_ingested(project)
+    finally:
+        client.close()
+    return {"project": project, "tree": rows, "last_ingested": last_ingested}
+
+
+def fetch_flow(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS,
+               include_external: bool = False, fmt: str = "drawio") -> dict:
+    """Return flow trace data and rendered content for the requested format."""
+    client = get_client(repo_path)
+    try:
+        data = client.trace_flow(start_name, project, max_hops, include_external=include_external)
+    finally:
+        client.close()
+
+    nodes = data["nodes"]
+    edges = data["edges"]
+    if not nodes:
+        return {"found": False, "entry_point": start_name, "nodes": [], "edges": [], "content": ""}
+
+    edges = _order_edges(edges, project, start_name)
+    if fmt == "json":
+        content = json.dumps(_build_flow_json(nodes, edges, project, start_name, repo_path), indent=2)
+    elif fmt == "mermaid":
+        content = _build_mermaid(nodes, edges, project, start_name)
+    else:
+        content = _build_drawio(nodes, edges, project, start_name)
+
+    return {
+        "found": True,
+        "entry_point": start_name,
+        "format": fmt,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes": nodes,
+        "edges": edges,
+        "content": content,
+    }
+
+
 def main() -> None:
     args = _parse_args()
     rich = args.rich
@@ -80,12 +269,9 @@ def main() -> None:
 
 def run_impact(entity_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Show what would break if entity_name is changed (reverse CALLS traversal)."""
-    client = get_client(repo_path)
-    try:
-        rows = client.find_callers(entity_name, project, max_hops)
-        updated_at = _entity_updated_at(client, entity_name)
-    finally:
-        client.close()
+    data = fetch_impact(entity_name, repo_path, project, max_hops)
+    rows = data["callers"]
+    updated_at = data["updated_at"]
 
     if not rows:
         print(f"Nothing calls '{entity_name}' within {max_hops} hops.")
@@ -110,12 +296,9 @@ def run_impact(entity_name: str, repo_path: str, project: str, max_hops: int = D
 
 def run_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Show what a file imports, directly and transitively."""
-    client = get_client(repo_path)
-    try:
-        rows = client.find_dependencies(file_path, project, max_hops)
-        updated_at = client.get_file_updated_at(file_path, project)
-    finally:
-        client.close()
+    data = fetch_deps(file_path, repo_path, project, max_hops)
+    rows = data["dependencies"]
+    updated_at = data["updated_at"]
 
     if not rows:
         print(f"No imports found for '{file_path}'.")
@@ -140,12 +323,9 @@ def run_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAU
 
 def run_styles(element_name: str, repo_path: str, project: str, rich: bool = False) -> None:
     """Show every CSS selector that styles element_name."""
-    client = get_client(repo_path)
-    try:
-        rows = client.find_styles(element_name, project)
-        updated_at = _entity_updated_at(client, element_name)
-    finally:
-        client.close()
+    data = fetch_styles(element_name, repo_path, project)
+    rows = data["selectors"]
+    updated_at = data["updated_at"]
 
     if not rows:
         print(f"No CSS selectors found for '{element_name}'.")
@@ -170,12 +350,9 @@ def run_styles(element_name: str, repo_path: str, project: str, rich: bool = Fal
 
 def run_trace(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Trace the call chain forward from start_name."""
-    client = get_client(repo_path)
-    try:
-        rows = client.trace_calls(start_name, project, max_hops)
-        updated_at = _entity_updated_at(client, start_name)
-    finally:
-        client.close()
+    data = fetch_trace(start_name, repo_path, project, max_hops)
+    rows = data["calls"]
+    updated_at = data["updated_at"]
 
     if not rows:
         print(f"'{start_name}' makes no tracked calls within {max_hops} hops.")
@@ -200,27 +377,13 @@ def run_trace(start_name: str, repo_path: str, project: str, max_hops: int = DEF
 
 def run_blast_radius(target: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Show every file reachable from target via CALLS/IMPORTS/INHERITS."""
-    client = get_client(repo_path)
-    try:
-        rows, target_file = client.get_blast_radius(target, project, max_hops)
-        updated_at = client.get_file_updated_at(target_file, project) if target_file else None
-    finally:
-        client.close()
-
-    if target_file is None:
+    data = fetch_blast_radius(target, repo_path, project, max_hops)
+    if not data["found"]:
         print(f"ERROR: '{target}' not found in project '{project}'")
         sys.exit(1)
 
-    seen: dict[str, dict] = {}
-    for row in rows:
-        f = row["file"]
-        if f not in seen or row["hops"] < seen[f]["hops"]:
-            seen[f] = row
-
-    if target_file not in seen:
-        seen[target_file] = {"file": target_file, "edge_type": "self", "hops": 0}
-
-    deduped = sorted(seen.values(), key=lambda r: (r["hops"], r["file"]))
+    deduped = data["files"]
+    updated_at = data["updated_at"]
     max_hop_seen = max(r["hops"] for r in deduped)
     summary = f"# blast radius: {len(deduped)} files across {max_hop_seen} hops"
 
@@ -243,79 +406,48 @@ def run_blast_radius(target: str, repo_path: str, project: str, max_hops: int = 
 
 def run_batch_impact(targets: list[str], repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
     """Union of blast radii across multiple targets."""
-    flat_targets: list[str] = []
-    for t in targets:
-        flat_targets.extend(s.strip() for s in t.split(",") if s.strip())
-
+    data = fetch_batch_impact(targets, repo_path, project, max_hops)
+    resolved = data["resolved"]
+    flat_targets = data["targets"]
     input_set = set(flat_targets)
-    client = get_client(repo_path)
-    try:
-        merged: dict[str, dict] = {}
-        resolved: list[str] = []
-        staleness_ts: str | None = None
 
-        for target in flat_targets:
-            rows, target_file = client.get_blast_radius(target, project, max_hops)
-            if target_file is None:
-                print(f"WARNING: '{target}' not found in project '{project}'")
-                continue
-            resolved.append(target)
-            if staleness_ts is None:
-                staleness_ts = client.get_file_updated_at(target_file, project)
-
-            all_rows = list(rows)
-            if not any(r["file"] == target_file for r in all_rows):
-                all_rows.append({"file": target_file, "edge_type": "self", "hops": 0})
-
-            for row in all_rows:
-                f = row["file"]
-                h = row["hops"]
-                if f not in merged:
-                    merged[f] = {"hops": h, "via": {target}}
-                else:
-                    if h < merged[f]["hops"]:
-                        merged[f]["hops"] = h
-                    merged[f]["via"].add(target)
-    finally:
-        client.close()
+    for missing in data["not_found"]:
+        print(f"WARNING: '{missing}' not found in project '{project}'")
 
     if not resolved:
         sys.exit(1)
 
-    deduped = sorted(merged.items(), key=lambda kv: (kv[1]["hops"], kv[0]))
-    max_hop_seen = max(v["hops"] for _, v in deduped) if deduped else 0
+    deduped = data["files"]
+    max_hop_seen = max(r["hops"] for r in deduped) if deduped else 0
     summary = f"# batch impact: {len(deduped)} files, {len(flat_targets)} input targets, {max_hop_seen} hops"
 
-    stamp = _staleness_line(staleness_ts, rich_mode=rich)
+    stamp = _staleness_line(data["updated_at"], rich_mode=rich)
     if rich:
         if stamp:
             console.print(stamp)
         table = _make_table(title=f"Batch impact ({len(targets)} targets)", columns=["File", "Via", "Hops"])
-        for f, meta in deduped:
+        for row in deduped:
+            f = row["file"]
             flags = " [also in input]" if f in input_set else ""
-            table.add_row(f"{f}{flags}", ", ".join(sorted(meta["via"])), str(meta["hops"]))
+            table.add_row(f"{f}{flags}", ", ".join(row["via"]), str(row["hops"]))
         console.print(table)
         console.print(f"[dim]{summary}[/]")
     else:
         if stamp:
             print(stamp)
-        for f, meta in deduped:
+        for row in deduped:
+            f = row["file"]
             flags = "  [also in input]" if f in input_set else ""
-            print(f"{f}  [via: {', '.join(sorted(meta['via']))}]{flags}")
+            print(f"{f}  [via: {', '.join(row['via'])}]{flags}")
         print(summary)
 
 
 def run_dead_code(repo_path: str, project: str, rich: bool = False,
                   show_entrypoints: bool = False) -> None:
     """Report entities with no inbound caller/importer — candidates for removal."""
-    client = get_client(repo_path)
-    try:
-        result = client.find_dead_code(project)
-    finally:
-        client.close()
-
-    dead = result["dead"]
-    maybe = result["maybe_entrypoint"]
+    data = fetch_dead_code(repo_path, project, show_entrypoints=show_entrypoints)
+    dead = data["dead"]
+    maybe = data["maybe_entrypoint"]
 
     if not dead and not maybe:
         print("No dead-code candidates found — every entity has an inbound reference.")
@@ -360,12 +492,9 @@ def run_dead_code(repo_path: str, project: str, rich: bool = False,
 
 def run_tree(repo_path: str, project: str, rich: bool = False) -> None:
     """Print the full project hierarchy as a tree."""
-    client = get_client(repo_path)
-    try:
-        rows = client.get_project_tree(project)
-        last_ingested = client.get_project_last_ingested(project)
-    finally:
-        client.close()
+    data = fetch_tree(repo_path, project)
+    rows = data["tree"]
+    last_ingested = data["last_ingested"]
 
     if not rows:
         print(f"No hierarchy found for project '{project}'. Has it been ingested?")
@@ -413,31 +542,16 @@ def run_flow(start_name: str, repo_path: str, project: str, max_hops: int = DEFA
       json    - structured trace enriched with signatures, docstrings, and
                 source snippets so an agent can narrate the data flow
     """
-    client = get_client(repo_path)
-    try:
-        data = client.trace_flow(start_name, project, max_hops,
-                                 include_external=include_external)
-    finally:
-        client.close()
+    data = fetch_flow(start_name, repo_path, project, max_hops,
+                      include_external=include_external, fmt=fmt)
 
-    nodes = data["nodes"]
-    edges = data["edges"]
-
-    if not nodes:
+    if not data["found"]:
         print(f"No flow found from '{start_name}' within {max_hops} hops.")
         sys.exit(1)
 
-    # Number edges with a single global sequence in execution order (DFS from
-    # the entry point), so each edge has a unique step: 1, then 2, then 3 ...
-    edges = _order_edges(edges, project, start_name)
-
-    if fmt == "json":
-        payload = _build_flow_json(nodes, edges, project, start_name, repo_path)
-        content = json.dumps(payload, indent=2)
-    elif fmt == "mermaid":
-        content = _build_mermaid(nodes, edges, project, start_name)
-    else:
-        content = _build_drawio(nodes, edges, project, start_name)
+    nodes = data["nodes"]
+    edges = data["edges"]
+    content = data["content"]
 
     if output is None:
         safe_name = start_name.replace("/", "_").replace(".", "_").replace(" ", "_")

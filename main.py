@@ -10,6 +10,7 @@ Commands:
 import sys
 import os
 import re
+import json
 from dotenv import load_dotenv
 from rich.console import Console
 
@@ -88,6 +89,7 @@ def init_project(repo_path: str) -> None:
                 f.write(f"\n{_CODECOMPASS_READ_INSTRUCTION}\n")
 
     _ensure_gitignore(repo_path)
+    _ensure_claude_hooks(repo_path)
     console.print(f"[bold green]Initialized CodeCompass in:[/] {compass_dir}")
     _register_project_agents_md(repo_path)
 
@@ -117,6 +119,118 @@ def _ensure_gitignore(repo_path: str) -> None:
         for entry, comment in missing:
             f.write(comment + "\n")
             f.write(entry + "\n")
+
+
+# The PreToolUse hook that forces codecompass for codebase navigation. Blocks the
+# Grep and Glob tools outright and catches the common code-reading shell commands
+# (cat/grep/rg/sed/awk/head/tail/less). Read is intentionally left alone: it is the
+# terminal step of the workflow ("find the entity with codecompass, then read it"),
+# and a stateless hook cannot tell whether codecompass was consulted first.
+_CLAUDE_HOOK_SCRIPT = r'''#!/usr/bin/env python3
+"""PreToolUse hook: force codecompass for codebase navigation instead of raw file search.
+
+Installed by `codecompass init`. Safe to edit — init will not overwrite an existing copy.
+"""
+import json
+import re
+import sys
+
+# Tools that codecompass unambiguously replaces for code navigation/search.
+_BLOCKED_TOOLS = {"Grep", "Glob"}
+# Code-reading shell commands. Read a specific known file via the Read tool instead.
+_BLOCKED_SHELL_RE = re.compile(
+    r"(?:^|[;|&]|&&|\|\|)\s*(cat|grep|rg|sed|awk|head|tail|less)(?:\s|$)"
+)
+
+_REASON = (
+    "Codebase navigation must use codecompass, not {what}. "
+    "Use `codecompass query --tree|--blast-radius|--impact|--deps|--flow` to find "
+    "the entity/file, then `read` it directly. "
+    "(`ls`/`find` are fine for non-code exploration — build output, "
+    "confirming a file was created, listing fixtures/assets.)"
+)
+
+
+def main() -> None:
+    payload = json.load(sys.stdin)
+    tool_name = payload.get("tool_name", "")
+    tool_input = payload.get("tool_input", {}) or {}
+
+    if tool_name in _BLOCKED_TOOLS:
+        print(_REASON.format(what=f"the {tool_name} tool"), file=sys.stderr)
+        sys.exit(2)
+
+    if tool_name == "Bash":
+        command = str(tool_input.get("command", ""))
+        if _BLOCKED_SHELL_RE.search(command):
+            print(_REASON.format(what="cat/grep/rg/sed/awk/head/tail/less shell commands"),
+                  file=sys.stderr)
+            sys.exit(2)
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+# Tool names that should route through the block-file-search hook.
+_CLAUDE_HOOK_MATCHERS = ("Bash", "Grep", "Glob")
+_CLAUDE_HOOK_COMMAND = "python3 .claude/hooks/block-file-search.py"
+
+
+def _ensure_claude_hooks(repo_path: str) -> None:
+    """Install the codecompass PreToolUse guardrail into the repo's .claude/ config.
+
+    Writes .claude/hooks/block-file-search.py (never overwriting an existing copy)
+    and merges the PreToolUse matchers into .claude/settings.json without clobbering
+    any hooks the user already configured.
+    """
+    claude_dir = os.path.join(repo_path, ".claude")
+    hooks_dir = os.path.join(claude_dir, "hooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+
+    hook_path = os.path.join(hooks_dir, "block-file-search.py")
+    if not os.path.exists(hook_path):
+        with open(hook_path, "w") as f:
+            f.write(_CLAUDE_HOOK_SCRIPT)
+        os.chmod(hook_path, 0o755)
+
+    settings_path = os.path.join(claude_dir, "settings.json")
+    settings: dict = {}
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path) as f:
+                settings = json.load(f) or {}
+        except (json.JSONDecodeError, ValueError):
+            console.print(
+                f"[yellow]Could not parse {settings_path}; leaving it untouched. "
+                "Add the codecompass PreToolUse hook manually.[/]"
+            )
+            return
+
+    hooks = settings.setdefault("hooks", {})
+    pre = hooks.setdefault("PreToolUse", [])
+
+    changed = False
+    for matcher in _CLAUDE_HOOK_MATCHERS:
+        entry = next((e for e in pre if e.get("matcher") == matcher), None)
+        if entry is None:
+            pre.append({
+                "matcher": matcher,
+                "hooks": [{"type": "command", "command": _CLAUDE_HOOK_COMMAND}],
+            })
+            changed = True
+            continue
+        entry_hooks = entry.setdefault("hooks", [])
+        if not any(h.get("command") == _CLAUDE_HOOK_COMMAND for h in entry_hooks):
+            entry_hooks.append({"type": "command", "command": _CLAUDE_HOOK_COMMAND})
+            changed = True
+
+    if changed:
+        with open(settings_path, "w") as f:
+            json.dump(settings, f, indent=2)
+            f.write("\n")
 
 
 def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None, describe: bool = False) -> None:
@@ -224,6 +338,11 @@ All commands default to the current directory — run them from the project root
 
 ### Rules — MUST follow
 
+0. **Never use `cat`, `grep`, or `rg` to search or read code content.**
+   Use the `codecompass query` commands below to find entities, structure, and
+   relationships instead — they know the real dependency graph; grepping does
+   not. Only `read` a specific file once codecompass has told you it matters.
+   `ls`/`find` are fine for non-code exploration — see the decision rule below.
 1. **Before editing any file**, run `--blast-radius` on it to see what depends on it:
    ```bash
    codecompass query --blast-radius <file_or_symbol>
@@ -239,6 +358,19 @@ All commands default to the current directory — run them from the project root
    ```
 4. **Never skip step 1.** Reading a file without checking its blast radius first
    means you may miss callers, importers, or CSS/HTML dependents.
+
+### Graph vs. `ls`/`find` — how to decide
+
+Use **codecompass** when the question is about code structure or relationships:
+"what calls this", "what depends on this file", "what does this module do",
+"how does this flow work", "is this dead code". The graph knows the real
+dependency edges; a directory listing does not.
+
+Use **`ls`/`find`** when the question has nothing to do with code
+relationships: confirming a generated/output file exists, listing a
+build/dist/log directory, checking test fixtures or assets, or any path the
+graph doesn't index. These are fine — don't force codecompass onto questions
+it can't answer.
 
 ### Available queries
 
@@ -395,7 +527,8 @@ def main():
         f"  {prog} describe [italic]<repo_path>[/] [--batch-size N] [--force] [--apply]\n"
         f"  {prog} query [italic]<--flag> <arg> <repo_path>[/]\n"
         f"  {prog} load-triples [italic]<triples.json> <repo_path>[/]\n"
-        f"  {prog} watch [italic]<repo_path>[/]"
+        f"  {prog} watch [italic]<repo_path>[/]\n"
+        f"  {prog} mcp [italic]<repo_path>[/]"
     )
 
     if len(sys.argv) < 2:
@@ -475,6 +608,13 @@ def main():
     elif command == "watch":
         args = sys.argv[2:]
         watch_code(args[0] if args else ".")
+
+    elif command == "mcp":
+        args = sys.argv[2:]
+        if args:
+            os.environ["CODECOMPASS_REPO"] = os.path.abspath(args[0])
+        from mcp_server import main as mcp_main
+        mcp_main()
 
     else:
         console.print(f"[red]Unknown command:[/] {command}\n")
