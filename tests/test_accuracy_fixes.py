@@ -339,6 +339,18 @@ def test_python_public_method_marked_exported():
     assert by_name.get("_private") is False, "underscore method is not exported"
 
 
+def test_php_psr4_import_resolution():
+    from graph.code_graph_client import _import_resolves_to
+    psr4 = {"GuzzleHttp": "src/", "GuzzleHttp.Tests": "tests/"}
+    assert _import_resolves_to("GuzzleHttp.Client", "src/Pool.php", "src/Client.php", psr4)
+    assert _import_resolves_to("GuzzleHttp.Handler.CurlFactory", "src/x.php",
+                               "src/Handler/CurlFactory.php", psr4)
+    assert _import_resolves_to("GuzzleHttp.Tests.ClientTest", "src/x.php",
+                               "tests/ClientTest.php", psr4)
+    assert not _import_resolves_to("GuzzleHttp.Client", "src/Pool.php", "src/Other.php", psr4)
+    assert not _import_resolves_to("Vendor.Lib.Thing", "src/x.php", "src/Client.php", psr4)
+
+
 def test_inheritance_super_resolution_all_langs():
     cases = [
         (".py", "class Command:\n    def invoke(self, c): pass\n"

@@ -60,17 +60,29 @@ def _strip_code_ext(path: str) -> str:
     return path
 
 
-def _import_resolves_to(import_str: str, from_file: str, target_file: str) -> bool:
+def _import_resolves_to(import_str: str, from_file: str, target_file: str,
+                        psr4: dict[str, str] | None = None) -> bool:
     """True if `import_str` written in `from_file` refers to `target_file`.
 
     Resolves relative CommonJS/ESM specifiers (`./response`, `../lib/response`,
-    with an implicit `/index`) and dotted module names (`lib.response`) against
-    the target's extension-stripped path. Package imports (`router`, `express`)
-    never match a project file and return False.
+    with an implicit `/index`), dotted module names (`lib.response`), and — via a
+    composer PSR-4 map — PHP namespaces (`GuzzleHttp.Client` → `src/Client.php`)
+    against the target's extension-stripped path. Package imports never match a
+    project file and return False.
     """
     if not import_str or not target_file:
         return False
     target_base = _strip_code_ext(target_file).replace("\\", "/")
+
+    # PSR-4 (PHP): namespace prefix -> directory, from composer.json autoload.
+    if psr4:
+        for prefix, directory in psr4.items():
+            pfx = prefix + "."
+            if import_str.startswith(pfx):
+                rest = import_str[len(pfx):].replace(".", "/")
+                base = f"{directory.rstrip('/')}/{rest}".replace("\\", "/")
+                if base == target_base:
+                    return True
 
     if import_str.startswith("."):
         from_dir = os.path.dirname(from_file)
@@ -931,10 +943,33 @@ class LocalGraphClient:
 
         return results, target_file
 
+    def _psr4(self) -> dict[str, str]:
+        """PHP composer PSR-4 map: dotted namespace prefix -> source directory
+        (e.g. {'GuzzleHttp': 'src/'}), so `use GuzzleHttp\\Client` resolves to a
+        file. Read once from composer.json at the repo root; empty if none."""
+        if hasattr(self, "_psr4_cache"):
+            return self._psr4_cache
+        m: dict[str, str] = {}
+        repo = os.path.dirname(os.path.dirname(self.storage_path))
+        try:
+            with open(os.path.join(repo, "composer.json")) as f:
+                data = json.load(f)
+            for key in ("autoload", "autoload-dev"):
+                for ns, path in (data.get(key, {}).get("psr-4", {}) or {}).items():
+                    prefix = ns.rstrip("\\").replace("\\", ".")
+                    paths = path if isinstance(path, list) else [path]
+                    if prefix and paths:
+                        m[prefix] = paths[0]
+        except Exception:
+            pass
+        self._psr4_cache = m
+        return m
+
     def _direct_importers(self, target_file: str) -> list[str]:
         """Source files with an IMPORTS edge whose module string resolves to
-        target_file. Handles both relative (`./response`) and dotted-module
-        (`lib.response`) import spellings."""
+        target_file. Handles relative (`./response`), dotted-module
+        (`lib.response`), and PHP PSR-4 namespace (`GuzzleHttp\\Client`) spellings."""
+        psr4 = self._psr4()
         importers: list[str] = []
         for _u, v, data in self.graph.edges(data=True):
             if data.get("type") != "IMPORTS":
@@ -943,7 +978,7 @@ class LocalGraphClient:
             if not from_file:
                 continue
             import_str = self.graph.nodes[v].get("name", "")
-            if _import_resolves_to(import_str, from_file, target_file):
+            if _import_resolves_to(import_str, from_file, target_file, psr4):
                 importers.append(from_file)
         return sorted(set(importers))
 

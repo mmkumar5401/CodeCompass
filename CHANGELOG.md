@@ -1,5 +1,14 @@
 # Changelog
 
+## [3.1.1] - 2026-07-11
+
+### Fixed
+- **PHP `use` imports now resolve to files via PSR-4.** `blast_radius`/`deps`
+  read `composer.json`'s `autoload`/`autoload-dev` `psr-4` map, so
+  `use GuzzleHttp\Client;` resolves to `src/Client.php`. This closes the last
+  PHP gap in reverse blast radius — a class imported but not called (e.g. a
+  constants class like `RequestOptions`) now correctly surfaces its dependents.
+
 ## [3.1.0] - 2026-07-11
 
 ### Added
