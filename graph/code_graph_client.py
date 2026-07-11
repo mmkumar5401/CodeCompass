@@ -862,60 +862,72 @@ class LocalGraphClient:
     def get_blast_radius(
         self, target: str, project: str, max_hops: int = 3
     ) -> tuple[list[dict], str | None]:
-        """Return all files reachable from target via CALLS/IMPORTS/INHERITS."""
-        # Try as entity name first (may resolve to several same-named nodes).
+        """Return every file AFFECTED IF the target changes — its *dependents*.
+
+        Traverses in reverse and transitively: who CALLS/INHERITS/REFERENCES the
+        target's symbols, and which files IMPORT the target file (importers of
+        importers included). This is the "what breaks if I edit this" direction —
+        NOT what the target itself depends on.
+        """
         ent_nodes = self._resolve_query_nodes(target, project) if "/" not in target else []
         target_file = None
 
         if ent_nodes:
             target_file = self.graph.nodes[ent_nodes[0]].get("file")
             start_ids = ent_nodes
+            target_files = {self.graph.nodes[n].get("file")
+                            for n in ent_nodes if self.graph.nodes[n].get("file")}
         else:
-            # Try as file path
             file_node = next((n for n, attr in self.graph.nodes(data=True)
                              if attr.get("type") == "File" and attr.get("path") == target), None)
             if not file_node:
                 return [], None
             target_file = target
-            # Collect all entity children of the file
+            target_files = {target}
             start_ids = [
                 succ for succ in self.graph.successors(file_node)
                 if any(e.get("type") == "CONTAINS" for e in self.graph.get_edge_data(file_node, succ).values())
                 and self.graph.nodes[succ].get("type") == "Entity"
             ]
 
+        dep_types = {"CALLS", "INHERITS", "REFERENCES", "USES_VAR"}
         results = []
+        seen_files = set(target_files)  # never report the target's own file(s)
+
+        # 1) Reverse code edges: who calls / inherits / references the symbols.
         visited = set(start_ids)
         queue = [(sid, 0) for sid in start_ids]
-
         while queue:
             current_id, depth = queue.pop(0)
             if depth >= max_hops:
                 continue
-            for succ in self.graph.successors(current_id):
-                edges = self.graph.get_edge_data(current_id, succ)
-                edge_types = {e.get("type") for e in edges.values()}
-                relevant = edge_types & {"CALLS", "IMPORTS", "INHERITS"}
-                if relevant and succ not in visited:
-                    node = self.graph.nodes[succ]
-                    if node.get("file"):
-                        results.append({
-                            "file": node["file"],
-                            "edge_type": next(iter(relevant)),
-                            "hops": depth + 1
-                        })
-                    visited.add(succ)
-                    queue.append((succ, depth + 1))
+            for pred in self.graph.predecessors(current_id):
+                edges = self.graph.get_edge_data(pred, current_id)
+                relevant = {e.get("type") for e in edges.values()} & dep_types
+                if not relevant or pred in visited:
+                    continue
+                visited.add(pred)
+                node = self.graph.nodes[pred]
+                f = node.get("file")
+                if node.get("type") == "Entity" and f and f not in seen_files:
+                    results.append({"file": f, "edge_type": next(iter(relevant)), "hops": depth + 1})
+                    seen_files.add(f)
+                queue.append((pred, depth + 1))
 
-        # Files that import the target are affected when it changes, but that is
-        # a reverse edge the forward traversal above never follows. Add direct
-        # importers explicitly so `require('./target')` dependents are surfaced.
-        if target_file:
-            seen_files = {r["file"] for r in results}
-            for importer in self._direct_importers(target_file):
-                if importer != target_file and importer not in seen_files:
-                    results.append({"file": importer, "edge_type": "IMPORTS", "hops": 1})
-                    seen_files.add(importer)
+        # 2) Transitive reverse IMPORTS: files importing the target file(s), then
+        #    their importers, out to max_hops.
+        frontier = set(target_files)
+        for hop in range(1, max_hops + 1):
+            importers = set()
+            for tf in frontier:
+                importers.update(self._direct_importers(tf))
+            importers -= seen_files
+            if not importers:
+                break
+            for imp in sorted(importers):
+                results.append({"file": imp, "edge_type": "IMPORTS", "hops": hop})
+                seen_files.add(imp)
+            frontier = importers
 
         return results, target_file
 

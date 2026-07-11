@@ -99,9 +99,12 @@ def _active_repo() -> str:
 
 @mcp.tool()
 def blast_radius(target: str, hops: int = DEFAULT_HOPS) -> dict:
-    """Return every file reachable from target via CALLS/IMPORTS/INHERITS.
+    """Return every file that DEPENDS ON the target — its dependents, traversed in
+    reverse and transitively (who calls / imports / inherits from it).
 
-    Use this before editing a file or symbol to see what else is affected.
+    Use this before editing a file or symbol to see what would be affected. An
+    entry point with no dependents (nothing imports it) returns few/none — that's
+    correct, not empty. This is the opposite direction from `deps`.
     """
     repo = _active_repo()
     _ensure_initialized(repo)

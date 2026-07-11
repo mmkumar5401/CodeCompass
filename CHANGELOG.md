@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.0.1] - 2026-07-11
+
+### Fixed
+- **`blast_radius` traversed the wrong direction.** It returned what the target
+  *depends on* (forward), not what *depends on the target*. It now traverses in
+  reverse and transitively — who calls / imports / inherits from the target —
+  which is the "what breaks if I edit this" question the tool is for. An entry
+  point that nothing imports now correctly returns few/no dependents (guzzle's
+  `Client.php`) instead of a misleading list of its own dependencies.
+
 ## [3.0.0] - 2026-07-11
 
 Major release: full-fidelity node identity, cross-language parity, and a

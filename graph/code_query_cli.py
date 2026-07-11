@@ -465,7 +465,7 @@ def run_trace(start_name: str, repo_path: str, project: str, max_hops: int = DEF
 
 
 def run_blast_radius(target: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
-    """Show every file reachable from target via CALLS/IMPORTS/INHERITS."""
+    """Show every file that DEPENDS ON the target (reverse: callers/importers/subclasses)."""
     data = fetch_blast_radius(target, repo_path, project, max_hops)
     if not data["found"]:
         print(f"ERROR: '{target}' not found in project '{project}'")
