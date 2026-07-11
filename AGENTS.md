@@ -25,7 +25,8 @@ All commands default to the current directory — run them from the project root
    ```bash
    codecompass query --impact <symbol>
    ```
-3. **After creating or deleting files**, re-ingest so the graph stays current:
+3. **After any code change** (edits, additions, deletions, renames, refactors),
+   re-ingest so the graph stays current:
    ```bash
    codecompass ingest-code
    ```
@@ -111,8 +112,7 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 
 ### When to re-ingest
 
-- After adding, renaming, or deleting source files
-- After major refactors (moved functions, renamed classes)
+- After every code change: edits, additions, deletions, renames, refactors
 - If query results look stale or incomplete
 
 ### Description enrichment — user-triggered ONLY
