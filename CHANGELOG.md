@@ -1,5 +1,38 @@
 # Changelog
 
+## [3.0.0] - 2026-07-11
+
+Major release: full-fidelity node identity, cross-language parity, and a
+discovery toolkit. **Requires a re-ingest** (node ids changed).
+
+### Added
+- **Class-level node de-merge.** Node ids are now file- *and* class-qualified
+  (`project:file:Class.method`), so same-named methods of different classes in
+  the **same file** stay distinct (`Command.invoke` vs `Context.invoke` in
+  click's `core.py`). Every definition and call carries `owner_class`; calls
+  resolve to `owner == receiver_type` first.
+- **PHP parity.** The PHP extractor gained receiver capture, type inference
+  (`new X()`, `$this`, typed params, return-type inference), and
+  visibility-based exports (`public` = API, `private`/`protected` = internal) —
+  matching the JS/TS and Python extractors.
+- **`grep` query** — regex search over graph entities (the graph-native
+  replacement for grepping source).
+- **Discovery decision guide** in the installed `AGENTS.md`
+  (discover→trace→read→edit; `grep` a named concept first for vague features).
+
+### Fixed
+- **`hierarchy_builder` never indexed `.php`/`.jsx` files** — its extension set
+  was out of sync with the parser, so PHP repos got no File nodes and
+  `blast_radius`/`deps` by file returned nothing. (Guzzle: 1 → 90 File nodes.)
+- **Impact bucket flood.** The unresolved-caller fallback now only fires when
+  there's no precise answer, so a common name (`invoke`) no longer floods a
+  query that already resolved.
+
+### Benchmarks (see `docs/benchmark-results.md`)
+- Tokens to a verified answer vs grep/read: requests −67%, click −82%,
+  guzzle −66%, express −82%. Wins every relational/discovery task across
+  JS, Python, and PHP.
+
 ## [2.8.0] - 2026-07-11
 
 ### Added

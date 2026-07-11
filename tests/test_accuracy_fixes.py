@@ -339,6 +339,30 @@ def test_python_public_method_marked_exported():
     assert by_name.get("_private") is False, "underscore method is not exported"
 
 
+def test_php_receiver_type_and_exports():
+    src = (
+        "<?php\n"
+        "class Session {\n"
+        "    public function send($r) { return 1; }\n"
+        "    private function _helper() { return 2; }\n"
+        "    public function getAdapter($u): HTTPAdapter { return new HTTPAdapter(); }\n"
+        "    public function request($m) {\n"
+        "        $adapter = $this->getAdapter($m);\n"
+        "        $this->send($m);\n"
+        "        return $adapter->send($m);\n"
+        "    }\n"
+        "}\n"
+    )
+    triples = _parse(src, suffix=".php")
+    sends = [t for t in triples if t.relation_type == "CALLS" and t.to_entity == "send"]
+    types = {t.call_receiver_type for t in sends}
+    assert "Session" in types, "$this->send() typed by enclosing class"
+    assert "HTTPAdapter" in types, "$adapter->send() typed via getAdapter's return type"
+    by_name = {t.from_entity: t.is_exported for t in triples if t.relation_type == "DEFINED_IN"}
+    assert by_name.get("_helper") is False, "private method is not exported"
+    assert by_name.get("request") is True, "public method is exported"
+
+
 def test_graph_grep_regex():
     triples = [
         CodeTriple("HTTPAdapter", "class", "DEFINED_IN", "m", "module", "adapters.py", 1),

@@ -44,6 +44,21 @@ Updated in `find_callers`, `get_blast_radius`, `trace_flow`, `trace_calls`,
 Node-iterating queries (`dead_code`, `search`, `map`) are unaffected — they
 never looked up by name.
 
+## Class-level qualification (v2)
+
+File-qualified ids still merge same-named methods of **different classes in the
+same file** (e.g. click's `core.py` holds `Command`, `Context`, `Group`, each
+with an `invoke`). Class qualification fixes this:
+
+- Every triple carries `owner_class` — the class its `from_entity` is defined in
+  (None for module-level). Method node ids become `project:{file}:{Class}.{name}`
+  (node `name` attr stays the bare method for grep/search).
+- Call resolution prefers a definition whose `owner_class == receiver_type`
+  (`self.invoke()` in a `Command` method → `Command.invoke`), then falls back to
+  same-file / single-candidate / name bucket.
+- `_resolve_query_nodes("Command.invoke")` matches nodes with name `invoke` and
+  owner `Command`.
+
 ## Scope / limits
 - Precise for: single-definition names, and multi-definition names where the
   receiver type resolves (constructor / annotation / `self`/`this`).

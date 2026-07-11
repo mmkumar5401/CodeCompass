@@ -20,7 +20,7 @@ _SKIP_DIRS = {
 }
 
 # Supported source file extensions (mirrors code_parser.SUPPORTED_EXTENSIONS)
-_SOURCE_EXTENSIONS = {".py", ".js", ".ts", ".tsx", ".html", ".css", ".scss"}
+_SOURCE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".scss", ".php"}
 
 
 def build_hierarchy(project_root: str, project_name: str, client) -> dict[str, str]:

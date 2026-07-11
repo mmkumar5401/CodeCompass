@@ -33,6 +33,12 @@ class CodeTriple:
     # Lets dead-code analysis avoid flagging intentionally-exported symbols.
     is_exported: bool = False
 
+    # Class that `from_entity` belongs to — the method's class for a definition,
+    # or the caller's class for a call. None for module-level entities. Lets node
+    # ids be class-qualified so same-named methods of different classes in the
+    # SAME file stay distinct (Command.invoke vs Context.invoke in core.py).
+    owner_class: str | None = None
+
 
 @dataclass
 class FileNode:

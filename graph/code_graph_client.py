@@ -37,12 +37,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _entity_id(project: str, name: str, file: str | None) -> str:
-    """Node id for an entity — file-qualified so same-named entities in different
-    files stay distinct. Case is preserved so `Session` (class) and `session`
-    (function) don't collide. External/module targets with no file are name-only."""
+def _entity_id(project: str, name: str, file: str | None, owner: str | None = None) -> str:
+    """Node id for an entity — file- and class-qualified so same-named entities
+    stay distinct across files AND across classes in the same file. Case is
+    preserved so `Session` (class) and `session` (function) don't collide.
+    External/module targets with no file are name-only.
+    """
     if file:
-        return f"{project}:{file}:{name}"
+        local = f"{owner}.{name}" if owner else name
+        return f"{project}:{file}:{local}"
     return f"{project}:{name}"
 
 
@@ -225,6 +228,8 @@ class LocalGraphClient:
         # later non-exported definition clear a flag an earlier one set.
         if getattr(triple, "is_exported", False):
             self.graph.nodes[from_id]["is_exported"] = True
+        if getattr(triple, "owner_class", None):
+            self.graph.nodes[from_id]["owner"] = triple.owner_class
 
         # Upsert to entity — only set language/kind/description if not already known
         self.graph.add_node(to_id)
@@ -260,13 +265,18 @@ class LocalGraphClient:
         name = triple.to_entity
         if triple.relation_type == "DEFINED_IN":
             return f"{project}:{name}"  # module container — name-only
-        cands = defs_by_name.get(name)
+        cands = defs_by_name.get(name)  # list of (node_id, file, owner)
         if cands:
             rt = getattr(triple, "call_receiver_type", None)
             if rt:
+                # strongest: a definition owned by exactly the receiver's class
+                for nid, f, owner in cands:
+                    if owner == rt:
+                        return nid
+                # next: any definition in the receiver class's file
                 cf = class_file.get(rt)
                 if cf:
-                    for nid, f in cands:
+                    for nid, f, owner in cands:
                         if f == cf:
                             return nid
             if len(cands) == 1:
@@ -281,19 +291,21 @@ class LocalGraphClient:
         project: str
     ) -> int:
         # Pass 1: index every definition so calls can resolve to a specific one.
-        defs_by_name: dict[str, list] = {}
+        defs_by_name: dict[str, list] = {}   # name -> [(node_id, file, owner)]
         class_file: dict[str, str] = {}
         for t in triples:
             if t.relation_type == "DEFINED_IN":
-                nid = _entity_id(project, t.from_entity, t.source_file)
-                defs_by_name.setdefault(t.from_entity, []).append((nid, t.source_file))
+                owner = getattr(t, "owner_class", None)
+                nid = _entity_id(project, t.from_entity, t.source_file, owner)
+                defs_by_name.setdefault(t.from_entity, []).append((nid, t.source_file, owner))
                 if t.from_type == "class":
                     class_file.setdefault(t.from_entity, t.source_file)
 
-        # Pass 2: write nodes/edges with resolved, file-qualified ids.
+        # Pass 2: write nodes/edges with resolved, file+class-qualified ids.
         for triple in triples:
             file_id = file_id_map.get(triple.source_file, "")
-            from_id = _entity_id(project, triple.from_entity, triple.source_file)
+            from_id = _entity_id(project, triple.from_entity, triple.source_file,
+                                 getattr(triple, "owner_class", None))
             to_id = self._resolve_to_id(triple, project, defs_by_name, class_file)
             self.write_code_triple(triple, file_id, project, from_id=from_id, to_id=to_id)
 
@@ -361,6 +373,12 @@ class LocalGraphClient:
         matches.sort(key=lambda n: self.graph.nodes[n].get("file") is None)
 
         if qualifier and matches:
+            # strongest: nodes whose owner class IS the qualifier (Command.invoke)
+            owned = [n for n in matches
+                     if (self.graph.nodes[n].get("owner") or "").lower() == qualifier.lower()]
+            if owned:
+                return owned
+            # next: nodes in the file where class <qualifier> is defined
             cls_files = {
                 a.get("file") for n, a in self.graph.nodes(data=True)
                 if a.get("type") == "Entity" and a.get("entity_type") == "class"
@@ -450,12 +468,14 @@ class LocalGraphClient:
                     visited.add(pred)
                     queue.append((pred, depth + 1))
 
-        # Qualified query (Type.method): also surface the name-only bucket's
-        # direct callers — calls whose receiver couldn't be statically typed
-        # (e.g. `adapter = self.get_adapter(url); adapter.send()`). They MAY hit
-        # this method, so we don't drop them, but flag resolved=False rather than
-        # claim false precision. An unqualified query already includes them.
-        if want_receiver is not None:
+        # Qualified query (Type.method): if we found NO precise caller, fall back
+        # to the name-only bucket — calls whose receiver couldn't be statically
+        # typed (e.g. `adapter = self.get_adapter(url); adapter.send()`). They MAY
+        # hit this method, so we surface them flagged resolved=False rather than
+        # return nothing. We skip this when there's already a precise answer,
+        # because the bucket for a common name (`invoke`) is mostly calls to OTHER
+        # same-named methods and would flood a query that already resolved.
+        if want_receiver is not None and not results:
             method = entity_name.rsplit(".", 1)[1]
             bucket = f"{project}:{method}"
             if bucket in self.graph and bucket not in target_set:

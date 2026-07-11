@@ -221,6 +221,7 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                         source_file=file_path,
                         line_number=_line(node),
                         is_exported=name in exported,
+                        owner_class=_enclosing_python_class(node),
                     ))
 
             case "class_definition":
@@ -308,6 +309,7 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                         line_number=_line(node),
                         call_receiver=receiver,
                         call_receiver_type=receiver_type,
+                        owner_class=_enclosing_python_class(node) if scope else None,
                     ))
 
     return triples
@@ -630,11 +632,127 @@ def _php_string_text(string_node: Node) -> str:
     return _text(frag) if frag else _text(string_node).strip("'\"")
 
 
+def _php_type_basename(node: Node | None) -> str | None:
+    """Class name from a PHP type node (`named_type`/`type`/`qualified_name`),
+    stripping any namespace. Skips scalar/pseudo types (int, string, void, …)."""
+    if node is None:
+        return None
+    for desc in _walk(node):
+        if desc.type in ("name", "qualified_name"):
+            base = _php_basename(desc)
+            if base and base[:1].isupper():  # PSR class-name convention
+                return base
+    return None
+
+
+def _php_new_type(node: Node | None) -> str | None:
+    """Class name of `new X(...)`, else None."""
+    if node is None or node.type != "object_creation_expression":
+        return None
+    for child in node.children:
+        if child.type in ("name", "qualified_name"):
+            base = _php_basename(child)
+            if base and base.lower() not in _PHP_SELF_REFERENTIAL:
+                return base
+    return None
+
+
+def _php_is_public(method_node: Node) -> bool:
+    """PHP method visibility — public (or no modifier, which defaults public) is
+    API; private/protected is internal. Reads the `visibility_modifier` child."""
+    for child in method_node.children:
+        if child.type == "visibility_modifier":
+            return _text(child).lower() not in ("private", "protected")
+    return True  # PHP methods default to public
+
+
+def _php_return_types(root: Node) -> dict[str, str]:
+    """Map function/method name -> declared return type (`function f(): Foo`)."""
+    rets: dict[str, str] = {}
+    conflict: set[str] = set()
+    for node in _walk(root):
+        if node.type in ("function_definition", "method_declaration"):
+            name = _php_name(node)
+            rt = node.child_by_field_name("return_type")
+            t = _php_type_basename(rt) if rt is not None else None
+            if name and t:
+                if name in rets and rets[name] != t:
+                    conflict.add(name)
+                else:
+                    rets[name] = t
+    for name in conflict:
+        rets.pop(name, None)
+    return rets
+
+
+def _php_type_env(root: Node) -> dict[str, str]:
+    """Best-effort PHP variable → class map (no `$` in keys).
+
+    Binds from `$x = new Foo()`, typed params (`function f(Foo $x)`), and
+    return-type inference (`$x = make()` where `make(): Foo`). Conflicts dropped.
+    """
+    ret_types = _php_return_types(root)
+    types: dict[str, str] = {}
+    ambiguous: set[str] = set()
+
+    def bind(name: str | None, t: str | None) -> None:
+        if not name or not t:
+            return
+        if name in types and types[name] != t:
+            ambiguous.add(name)
+        else:
+            types[name] = t
+
+    for node in _walk(root):
+        if node.type == "assignment_expression" and node.children:
+            lhs = node.children[0]
+            rhs = node.children[-1]
+            if lhs.type == "variable_name":
+                name = _php_var_name(lhs)
+                bind(name, _php_new_type(rhs))
+                if rhs.type in ("function_call_expression", "member_call_expression",
+                                "nullsafe_member_call_expression", "scoped_call_expression"):
+                    callee = _child_of_type(rhs, "name")
+                    if callee is not None:
+                        bind(name, ret_types.get(_text(callee)))
+        elif node.type == "simple_parameter":
+            var = _child_of_type(node, "variable_name")
+            ty = node.child_by_field_name("type")
+            if var is not None and ty is not None:
+                bind(_php_var_name(var), _php_type_basename(ty))
+
+    for name in ambiguous:
+        types.pop(name, None)
+    return types
+
+
+def _php_call_receiver(node: Node, env: dict[str, str]) -> tuple[str | None, str | None]:
+    """Receiver text + inferred type for a member call `$obj->method()`."""
+    obj = node.child_by_field_name("object")
+    if obj is None:
+        obj = node.children[0] if node.children else None
+    if obj is None:
+        return None, None
+    # inline `(new Foo())->m()`
+    nt = _php_new_type(obj)
+    if nt:
+        return "new", nt
+    if obj.type == "variable_name":
+        var = _php_var_name(obj)
+        if var == "this":
+            container = _enclosing_php_container(node)
+            return "this", (container[0] if container else None)
+        return var, env.get(var)
+    return _text(obj), None
+
+
 def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
     module_name = _module_name_from_path(file_path)
     triples: list[CodeTriple] = []
+    type_env = _php_type_env(root)
 
-    def defined_in(name: str, entity_type: str, line: int) -> None:
+    def defined_in(name: str, entity_type: str, line: int, is_exported: bool = True,
+                   owner: str | None = None) -> None:
         triples.append(CodeTriple(
             from_entity=name,
             from_type=entity_type,
@@ -643,6 +761,8 @@ def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
             to_type=TYPE_MODULE,
             source_file=file_path,
             line_number=line,
+            is_exported=is_exported,
+            owner_class=owner,
         ))
 
     def inherits(from_name: str, from_type: str, to_node: Node, to_type: str) -> None:
@@ -658,11 +778,13 @@ def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
                 line_number=_line(to_node),
             ))
 
-    def calls(callee: str, callee_type: str, line: int, scope_node: Node) -> None:
+    def calls(callee: str, callee_type: str, line: int, scope_node: Node,
+              receiver: str | None = None, receiver_type: str | None = None) -> None:
         if not callee or not _is_meaningful_callee(callee):
             return
         scope = _enclosing_php_scope(scope_node)
         caller, caller_type = scope if scope else (module_name, TYPE_MODULE)
+        container = _enclosing_php_container(scope_node)
         triples.append(CodeTriple(
             from_entity=caller,
             from_type=caller_type,
@@ -671,6 +793,9 @@ def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
             to_type=callee_type,
             source_file=file_path,
             line_number=line,
+            call_receiver=receiver,
+            call_receiver_type=receiver_type,
+            owner_class=container[0] if (scope and container) else None,
         ))
 
     for node in _walk(root):
@@ -684,7 +809,9 @@ def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
             case "method_declaration":
                 name = _php_name(node)
                 if name:
-                    defined_in(name, TYPE_FUNCTION, _line(node))
+                    container = _enclosing_php_container(node)
+                    defined_in(name, TYPE_FUNCTION, _line(node), is_exported=_php_is_public(node),
+                               owner=container[0] if container else None)
 
             case "anonymous_function" | "arrow_function":
                 parent = node.parent
@@ -851,7 +978,9 @@ def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
             case "member_call_expression" | "nullsafe_member_call_expression":
                 callee_node = _child_of_type(node, "name")
                 if callee_node:
-                    calls(_text(callee_node), TYPE_FUNCTION, _line(node), node)
+                    recv, recv_type = _php_call_receiver(node, type_env)
+                    calls(_text(callee_node), TYPE_FUNCTION, _line(node), node,
+                          receiver=recv, receiver_type=recv_type)
 
             case "scoped_call_expression":
                 names = _children_of_type(node, "name")
@@ -886,7 +1015,7 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
     # Best-effort variable → type map for receiver type inference on calls.
     type_env = _js_type_env(root)
 
-    def defined(name: str, line: int) -> None:
+    def defined(name: str, line: int, owner: str | None = None) -> None:
         triples.append(CodeTriple(
             from_entity=name,
             from_type=TYPE_FUNCTION,
@@ -896,6 +1025,7 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
             source_file=file_path,
             line_number=line,
             is_exported=name in exported,
+            owner_class=owner,
         ))
 
     for node in _walk(root):
@@ -908,7 +1038,7 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
             case "method_definition":
                 name_node = _child_of_type(node, "property_identifier")
                 if name_node:
-                    defined(_text(name_node), _line(name_node))
+                    defined(_text(name_node), _line(name_node), owner=_enclosing_class_name(node))
 
             case "variable_declarator":
                 # Capture: const foo = () => ...
@@ -970,6 +1100,7 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
                         line_number=_line(node),
                         call_receiver=receiver,
                         call_receiver_type=receiver_type,
+                        owner_class=_enclosing_class_name(node) if scope else None,
                     ))
 
     return triples
