@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.2] - 2026-07-11
+
+### Added
+- CI: pushes to `main` now auto-publish to PyPI when `pyproject.toml`'s
+  version changes, gated by a version-check job so routine pushes are a
+  no-op (`.github/workflows/pypi-publish.yml`). This release is the first
+  test of that pipeline.
+
 ## [2.6.1] - 2026-07-11
 
 ### Changed
