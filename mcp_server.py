@@ -27,7 +27,10 @@ from graph.code_query_cli import (
     fetch_dead_code,
     fetch_deps,
     fetch_flow,
+    fetch_flow_summary,
     fetch_impact,
+    fetch_map,
+    fetch_search,
     fetch_styles,
     fetch_trace,
     fetch_tree,
@@ -152,23 +155,81 @@ def styles(element: str) -> dict:
 
 
 @mcp.tool()
+def map(include_tests: bool = False) -> dict:
+    """Compact `{file: [symbols]}` index of the codebase — the discovery entry
+    point for a vague task.
+
+    Returns every implementation symbol grouped by file, names only (a few
+    thousand tokens, ~37x leaner than `tree`). Read it once and use your own
+    judgment to find where a feature belongs — e.g. for "add response caching"
+    you can see the request handler and the response-send functions and reason
+    about where to hook in — then drill in with flow/impact/deps. Prefer this
+    over keyword `search` when intent is semantic, not a literal string.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    return fetch_map(repo, os.path.basename(repo), include_tests=include_tests)
+
+
+@mcp.tool()
+def search(query: str, limit: int = 30, kind: str = "") -> dict:
+    """Find entities in the graph by keyword — start here when you don't yet know
+    a symbol name.
+
+    Matches the query against entity names, files, and descriptions and returns a
+    ranked, lean candidate list (name/kind/file). This is the discovery step for a
+    vague task ("caching", "request handler", "session"): search to find the
+    relevant symbols, then drill in with impact/flow/deps. Optional `kind` filters
+    by entity type (e.g. "function", "class").
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    return fetch_search(query, repo, os.path.basename(repo), limit=limit, kind=kind or None)
+
+
+@mcp.tool()
 def flow(
     entry_symbol: str,
     hops: int = DEFAULT_HOPS,
-    format: str = "json",
     include_external: bool = False,
 ) -> dict:
-    """Trace a call/import flow from an entry point.
+    """Trace a call/import flow from an entry point — lean structure only.
 
-    Returns structured trace data plus rendered content. Format can be
-    "json" (recommended for narration), "mermaid", or "drawio".
+    Returns just what an agent needs to navigate: each node's name/kind/file/
+    depth and each edge's from/to/type/order/line. No embedded source or image.
+    Use flow_summary when a person needs a readable walkthrough.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    return fetch_flow(
+        entry_symbol,
+        repo,
+        os.path.basename(repo),
+        max_hops=hops,
+        include_external=include_external,
+    )
+
+
+@mcp.tool()
+def flow_summary(
+    entry_symbol: str,
+    hops: int = DEFAULT_HOPS,
+    format: str = "mermaid",
+    include_external: bool = False,
+) -> dict:
+    """Human-facing flow walkthrough: the trace plus a rendered narration.
+
+    format "mermaid" (default) returns a Markdown flowchart + prose narration;
+    "json" also embeds each function's signature, docstring, and source snippet;
+    "drawio" renders a diagram. Heavier than `flow` — use for reading, not for
+    an agent that just needs the call structure.
     """
     repo = _active_repo()
     _ensure_initialized(repo)
     fmt = format.lower()
     if fmt not in {"drawio", "mermaid", "json"}:
         raise ValueError(f"format must be 'drawio', 'mermaid', or 'json', got '{format}'")
-    return fetch_flow(
+    return fetch_flow_summary(
         entry_symbol,
         repo,
         os.path.basename(repo),

@@ -16,6 +16,23 @@ class CodeTriple:
     source_file: str  # relative path from project root
     line_number: int
 
+    # Receiver expression text for a member call (`app.handle()` -> "app").
+    # None for bare-identifier calls and non-CALLS triples. Lets impact/callers
+    # distinguish same-named methods on different receivers (app.handle vs
+    # router.handle) instead of silently merging them.
+    call_receiver: str | None = None
+
+    # Inferred *type* of the receiver, when statically derivable — from
+    # `new Router()`, a TypeScript annotation, or class-method `this`. Enables
+    # automatic disambiguation (`impact "Router.handle"` returns only calls on a
+    # Router) independent of the local variable name. None when not inferable.
+    call_receiver_type: str | None = None
+
+    # True when this DEFINED_IN triple's entity is part of the module's public
+    # API (ES `export`, `module.exports`, or a property of the exports object).
+    # Lets dead-code analysis avoid flagging intentionally-exported symbols.
+    is_exported: bool = False
+
 
 @dataclass
 class FileNode:

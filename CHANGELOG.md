@@ -1,5 +1,73 @@
 # Changelog
 
+## [2.7.0] - 2026-07-11
+
+### Added
+- **`map` query** — a compact `{file: [symbols]}` index of the codebase
+  (~37x leaner than `--tree`) for an agent to reason over during discovery.
+  The semantic-discovery entry point for a vague task: read the map, use your
+  own judgment to find where a feature belongs, then drill in with
+  `flow`/`impact`/`deps`. On an Express ingest this cut the cost of orienting
+  to a vague feature ("add response caching") from ~14k tokens (tree + old
+  flows) to ~874.
+- **`search` query** — keyword lookup over entity names/files/descriptions,
+  OR-ranked, returning a lean candidate list. Use when you have a literal
+  string/symbol to look for; prefer `map` when intent is semantic.
+
+### Changed
+- **`flow` is now lean by default** — returns only the call structure an agent
+  needs (node name/kind/file/depth, edge from/to/type/order/line), no embedded
+  source or rendered image. This roughly 5x'd the cost on wide flows before.
+  The human-facing walkthrough (mermaid flowchart + prose narration, or
+  source-embedded json) moved to a new **`flow_summary`** query.
+- **Navigation guardrail retargeted and relaxed.** The `init`-installed
+  PreToolUse hook (and pi extension) now block only code *search* (`grep`/`rg`,
+  the Grep/Glob tools) and whole-file `cat` dumps — routing discovery through
+  `--map`/`--search` — while leaving targeted reads (Read tool, `sed -n`,
+  `head`/`tail`) free. Previously it hard-blocked all text search including
+  cheap slice reads, which forced the graph onto tasks where grep is cheaper
+  and blocked the grep-to-verify step the tools themselves recommend.
+
+All three fixes below apply to both the JavaScript/TypeScript and Python
+extractors (receiver capture, `new Foo()`/`Foo()` + annotation + `self`/`this`
+type inference, and export/public-API awareness via `module.exports`/`export`
+for JS and `__all__` + public class methods for Python).
+
+### Fixed
+- **`blast_radius` / `batch_impact` missed CommonJS importers.** The JS/TS
+  parser now records `require('./x')` and dynamic `import('./x')` as IMPORTS
+  edges (previously only ES `import` statements were recognized), and
+  `get_blast_radius` resolves relative/dotted import specifiers to project
+  files and adds direct importers to the result. Editing a file now surfaces
+  the modules that `require()` it.
+- **`impact` merged same-named methods on different receivers.** Call sites now
+  carry the receiver expression (`app.handle` → `"app"`) and an inferred
+  receiver *type*, so `find_callers` disambiguates same-named methods
+  automatically. Receiver types are inferred from `new Router()`
+  instantiations, TypeScript parameter/variable annotations, and class-method
+  `this`; `impact "Router.handle"` then returns exactly the calls on a Router,
+  name-independent, and a coincidental variable name never satisfies a typed
+  query. `impact "app.handle"` filters by receiver, and every unqualified
+  result row carries both `receiver` and `receiver_type` so collisions are
+  fully visible. Node IDs are unchanged, so flow/trace/blast_radius are
+  unaffected. (Receivers with no static type — a bare parameter later filled by
+  a mixin, e.g. Express's `fn.handle` — stay name-matched; resolving those
+  needs cross-function data-flow analysis.)
+- **`dead_code` mis-flagged Python public API and dunder methods.** Dunder
+  methods (`__call__`, `__get__`, `__getattr__`, …) are now treated as runtime
+  entry points, and Python's public surface is recognized more completely —
+  public (non-underscore) module-level functions and classes, not just class
+  methods, are classified as public API. On a Flask ingest this cut the
+  `src/flask` dead-code candidate list from 46 (37 of them public API or
+  dunders) to 9 genuine underscore-private helpers.
+- **`dead_code` flagged exported public API.** Definitions now track an
+  `is_exported` flag from ES `export`, `module.exports = obj`, exports-object
+  property assignments (`res.send = …`), chained `var app = exports =
+  module.exports = {}` aliases, and `defineGetter`/`defineProperty`
+  registrations. Exported symbols are classified as possible entry points
+  rather than dead. (Functions reachable only via callbacks/`.bind()`/event
+  emitters remain candidates — that needs data-flow analysis.)
+
 ## [2.6.2] - 2026-07-11
 
 ### Added

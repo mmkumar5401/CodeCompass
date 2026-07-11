@@ -51,6 +51,27 @@ def fetch_impact(entity_name: str, repo_path: str, project: str, max_hops: int =
     return {"entity": entity_name, "callers": rows, "updated_at": updated_at}
 
 
+def fetch_search(query: str, repo_path: str, project: str, limit: int = 30,
+                 kind: str | None = None) -> dict:
+    """Search the graph for entities matching a keyword — the discovery entry point."""
+    client = get_client(repo_path)
+    try:
+        rows = client.search_entities(query, project, limit=limit, kind=kind)
+    finally:
+        client.close()
+    return {"query": query, "matches": rows, "count": len(rows)}
+
+
+def fetch_map(repo_path: str, project: str, include_tests: bool = False) -> dict:
+    """Compact `{file: [symbols]}` index for an agent to reason over during discovery."""
+    client = get_client(repo_path)
+    try:
+        m = client.symbol_map(project, include_tests=include_tests)
+    finally:
+        client.close()
+    return {"project": project, "files": m, "file_count": len(m)}
+
+
 def fetch_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
     """Return what file_path imports as structured data."""
     client = get_client(repo_path)
@@ -192,8 +213,54 @@ def fetch_tree(repo_path: str, project: str) -> dict:
 
 
 def fetch_flow(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS,
-               include_external: bool = False, fmt: str = "drawio") -> dict:
-    """Return flow trace data and rendered content for the requested format."""
+               include_external: bool = False) -> dict:
+    """Lean flow trace for an agent: just the call structure it needs to navigate.
+
+    Returns each node's name/kind/file/depth and each edge's from/to/type/order/
+    line — NO embedded source, docstrings, narration, or rendered image. Use
+    fetch_flow_summary for a human-facing walkthrough (mermaid + narration).
+    """
+    client = get_client(repo_path)
+    try:
+        data = client.trace_flow(start_name, project, max_hops, include_external=include_external)
+    finally:
+        client.close()
+
+    nodes = data["nodes"]
+    edges = data["edges"]
+    if not nodes:
+        return {"found": False, "entry_point": start_name, "nodes": [], "edges": []}
+
+    edges = _order_edges(edges, project, start_name)
+    lean_nodes = [
+        {"id": n["id"], "name": n["name"], "kind": n.get("kind", ""),
+         "file": n.get("file", ""), "depth": n["depth"]}
+        for n in sorted(nodes, key=lambda n: n["depth"])
+    ]
+    lean_edges = [
+        {"from": e["from"], "to": e["to"], "type": e["type"],
+         "order": e.get("order"), "line": e.get("line")}
+        for e in edges
+    ]
+    return {
+        "found": True,
+        "entry_point": start_name,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "nodes": lean_nodes,
+        "edges": lean_edges,
+    }
+
+
+def fetch_flow_summary(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS,
+                       include_external: bool = False, fmt: str = "mermaid") -> dict:
+    """Human-facing flow walkthrough: the trace plus a rendered narration.
+
+    Default format is "mermaid" (a Markdown flowchart + prose narration). "json"
+    additionally embeds each function's signature, docstring, and source snippet;
+    "drawio" renders a diagram. Heavier than fetch_flow — use when a person needs
+    to read the flow, not when an agent just needs the structure.
+    """
     client = get_client(repo_path)
     try:
         data = client.trace_flow(start_name, project, max_hops, include_external=include_external)
@@ -208,10 +275,11 @@ def fetch_flow(start_name: str, repo_path: str, project: str, max_hops: int = DE
     edges = _order_edges(edges, project, start_name)
     if fmt == "json":
         content = json.dumps(_build_flow_json(nodes, edges, project, start_name, repo_path), indent=2)
-    elif fmt == "mermaid":
-        content = _build_mermaid(nodes, edges, project, start_name)
-    else:
+    elif fmt == "drawio":
         content = _build_drawio(nodes, edges, project, start_name)
+    else:
+        fmt = "mermaid"
+        content = _build_mermaid(nodes, edges, project, start_name)
 
     return {
         "found": True,
@@ -542,8 +610,8 @@ def run_flow(start_name: str, repo_path: str, project: str, max_hops: int = DEFA
       json    - structured trace enriched with signatures, docstrings, and
                 source snippets so an agent can narrate the data flow
     """
-    data = fetch_flow(start_name, repo_path, project, max_hops,
-                      include_external=include_external, fmt=fmt)
+    data = fetch_flow_summary(start_name, repo_path, project, max_hops,
+                              include_external=include_external, fmt=fmt)
 
     if not data["found"]:
         print(f"No flow found from '{start_name}' within {max_hops} hops.")

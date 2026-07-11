@@ -85,13 +85,22 @@ async def test_impact_tool_for_known_symbol(configured):
 
 
 @pytest.mark.asyncio
-async def test_flow_tool_returns_json(configured):
-    result = await server_module.mcp.call_tool(
-        "flow", {"entry_symbol": "main", "format": "json"}
-    )
+async def test_flow_tool_returns_lean_structure(configured):
+    # flow is lean now: structure only, no embedded source/content field.
+    result = await server_module.mcp.call_tool("flow", {"entry_symbol": "main"})
     assert not result.is_error
     text = result.content[0].text
     assert "entry_point" in text
+    assert "content" not in text  # narration/source lives in flow_summary, not flow
+
+
+@pytest.mark.asyncio
+async def test_flow_summary_tool_returns_content(configured):
+    result = await server_module.mcp.call_tool(
+        "flow_summary", {"entry_symbol": "main", "format": "mermaid"}
+    )
+    assert not result.is_error
+    assert "entry_point" in result.content[0].text
 
 
 @pytest.mark.asyncio

@@ -204,6 +204,9 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
     module_name = _module_name_from_path(file_path)
     triples: list[CodeTriple] = []
 
+    exported = _collect_python_exports(root)
+    type_env = _py_type_env(root)
+
     for node in _walk(root):
         match node.type:
             case "function_definition":
@@ -217,6 +220,7 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                         to_type=TYPE_MODULE,
                         source_file=file_path,
                         line_number=_line(node),
+                        is_exported=name in exported,
                     ))
 
             case "class_definition":
@@ -224,6 +228,17 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                 if not name:
                     continue
                 class_name = name
+
+                triples.append(CodeTriple(
+                    from_entity=class_name,
+                    from_type=TYPE_CLASS,
+                    relation_type=DEFINED_IN,
+                    to_entity=module_name,
+                    to_type=TYPE_MODULE,
+                    source_file=file_path,
+                    line_number=_line(node),
+                    is_exported=class_name in exported,
+                ))
 
                 # Extract base classes from argument_list
                 arg_list = _child_of_type(node, "argument_list")
@@ -277,11 +292,12 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                     ))
 
             case "call":
-                callee = _extract_python_callee(node)
+                callee, receiver, obj = _extract_python_call_parts(node)
                 if callee and _is_meaningful_callee(callee):
                     scope = _enclosing_scope(node)
                     caller = scope or module_name
                     caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
+                    receiver_type = _resolve_py_receiver_type(receiver, obj, node, type_env)
                     triples.append(CodeTriple(
                         from_entity=caller,
                         from_type=caller_type,
@@ -290,28 +306,175 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                         to_type=TYPE_FUNCTION,
                         source_file=file_path,
                         line_number=_line(node),
+                        call_receiver=receiver,
+                        call_receiver_type=receiver_type,
                     ))
 
     return triples
 
 
 def _extract_python_callee(call_node: Node) -> str | None:
-    """Extract the callee name from a `call` node."""
-    # First child is the function expression
+    """Back-compat shim: callee name only."""
+    return _extract_python_call_parts(call_node)[0]
+
+
+def _extract_python_call_parts(call_node: Node) -> tuple[str | None, str | None, Node | None]:
+    """Return (callee_name, receiver_text, receiver_object_node) for a `call`."""
     if not call_node.children:
-        return None
+        return None, None, None
     fn_node = call_node.children[0]
     if fn_node.type == "identifier":
-        return _text(fn_node)
+        return _text(fn_node), None, None
     if fn_node.type == "attribute":
-        # `obj.method` — the attribute being called is the LAST identifier,
-        # not the object it's accessed on (e.g. pipeline.submit → "submit").
+        # `obj.method` — the called attribute is the LAST identifier, the object
+        # it is accessed on is the receiver (e.g. pipeline.submit → "submit"
+        # called on "pipeline").
         attr = fn_node.child_by_field_name("attribute")
+        obj = fn_node.child_by_field_name("object")
         if attr is None:
             idents = [c for c in fn_node.children if c.type == "identifier"]
             attr = idents[-1] if idents else None
-        return _text(attr) if attr else None
+        receiver = _text(obj) if obj is not None else None
+        return (_text(attr) if attr else None), receiver, obj
+    return None, None, None
+
+
+def _py_call_class(node: Node | None) -> str | None:
+    """Class name if `node` is an instantiation `Foo(...)`.
+
+    Heuristic: the callee is a bare identifier that is either CapWorded (the
+    PEP 8 class convention) or a dotted attribute ending in one. Returns None
+    for lower-case function calls.
+    """
+    if node is None or node.type != "call":
+        return None
+    fn = node.children[0] if node.children else None
+    if fn is None:
+        return None
+    if fn.type == "identifier":
+        name = _text(fn)
+    elif fn.type == "attribute":
+        attr = fn.child_by_field_name("attribute")
+        name = _text(attr) if attr is not None else ""
+    else:
+        return None
+    return name if name and name[:1].isupper() else None
+
+
+def _py_type_name(ann: Node | None) -> str | None:
+    """First plain type name from a Python annotation node.
+
+    `Foo` -> "Foo"; `list[Foo]` -> "list" (skipped as builtin); unions/optionals
+    resolve to their first identifier. Lower-case builtins are ignored.
+    """
+    if ann is None:
+        return None
+    for desc in _walk(ann):
+        if desc.type == "identifier":
+            name = _text(desc)
+            if name and name[:1].isupper():
+                return name
     return None
+
+
+def _py_type_env(root: Node) -> dict[str, str]:
+    """Best-effort variable → class map for a Python module.
+
+    Binds from unambiguous local signals: `x = Foo()` instantiations and
+    annotations (`x: Foo`, `def f(x: Foo)`). A name bound to two different types
+    is dropped rather than mis-resolved.
+    """
+    types: dict[str, str] = {}
+    ambiguous: set[str] = set()
+
+    def bind(name: str | None, t: str | None) -> None:
+        if not name or not t:
+            return
+        if name in types and types[name] != t:
+            ambiguous.add(name)
+        else:
+            types[name] = t
+
+    for node in _walk(root):
+        if node.type == "assignment":
+            left = node.child_by_field_name("left")
+            ann = node.child_by_field_name("type")
+            right = node.child_by_field_name("right")
+            if left is not None and left.type == "identifier":
+                name = _text(left)
+                bind(name, _py_type_name(ann))
+                if ann is None:
+                    bind(name, _py_call_class(right))
+        elif node.type in ("typed_parameter", "typed_default_parameter"):
+            ident = _child_of_type(node, "identifier")
+            ann = node.child_by_field_name("type")
+            bind(_text(ident) if ident is not None else None, _py_type_name(ann))
+
+    for name in ambiguous:
+        types.pop(name, None)
+    return types
+
+
+def _enclosing_python_class(node: Node) -> str | None:
+    """Name of the nearest enclosing `class C:`, for resolving `self`/`cls`."""
+    current = node.parent
+    while current:
+        if current.type == "class_definition":
+            name_node = _child_of_type(current, "identifier")
+            if name_node:
+                return _text(name_node)
+        current = current.parent
+    return None
+
+
+def _resolve_py_receiver_type(receiver: str | None, obj: Node | None,
+                              call_node: Node, env: dict[str, str]) -> str | None:
+    """Infer a Python receiver's type from `self`/`cls`, inline `Foo()`, or env."""
+    if _py_call_class(obj) is not None:
+        return _py_call_class(obj)
+    if receiver in ("self", "cls"):
+        return _enclosing_python_class(call_node)
+    if receiver is not None and receiver in env:
+        return env[receiver]
+    return None
+
+
+def _collect_python_exports(root: Node) -> set[str]:
+    """Names that are public API of a Python module.
+
+    Python has no `module.exports`; public surface is conventional. A symbol is
+    treated as public API when it is any of:
+      - listed in a module-level `__all__`,
+      - a public (non-underscore) function — module-level or a class method
+        (instance methods dispatch dynamically and rarely have a captured
+        static caller), or
+      - a public (non-underscore) class.
+
+    Public symbols may be called only by external consumers, so lacking an
+    in-repo caller is not evidence of dead code — they are surfaced as possible
+    entry points instead. Underscore-private symbols remain genuine candidates.
+    """
+    exported: set[str] = set()
+
+    for node in _walk(root):
+        if node.type == "assignment":
+            left = node.child_by_field_name("left")
+            right = node.child_by_field_name("right")
+            if left is not None and _text(left) == "__all__" and right is not None:
+                for desc in _walk(right):
+                    if desc.type == "string":
+                        content = _child_of_type(desc, "string_content")
+                        name = _text(content) if content is not None else _text(desc).strip("'\"")
+                        if name:
+                            exported.add(name)
+        elif node.type in ("function_definition", "class_definition"):
+            name_node = _child_of_type(node, "identifier")
+            if name_node is not None:
+                name = _text(name_node)
+                if not name.startswith("_"):
+                    exported.add(name)
+
+    return exported
 
 
 # ---------------------------------------------------------------------------
@@ -686,33 +849,36 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
     module_name = _module_name_from_path(file_path)
     triples: list[CodeTriple] = []
 
+    # Pre-scan for names that reach the module's public API so definitions can
+    # be tagged is_exported (used by dead-code analysis to avoid false positives).
+    exported = _collect_js_exports(root)
+
+    # Best-effort variable → type map for receiver type inference on calls.
+    type_env = _js_type_env(root)
+
+    def defined(name: str, line: int) -> None:
+        triples.append(CodeTriple(
+            from_entity=name,
+            from_type=TYPE_FUNCTION,
+            relation_type=DEFINED_IN,
+            to_entity=module_name,
+            to_type=TYPE_MODULE,
+            source_file=file_path,
+            line_number=line,
+            is_exported=name in exported,
+        ))
+
     for node in _walk(root):
         match node.type:
             case "function_declaration" | "function_expression":
                 name_node = _child_of_type(node, "identifier")
                 if name_node:
-                    triples.append(CodeTriple(
-                        from_entity=_text(name_node),
-                        from_type=TYPE_FUNCTION,
-                        relation_type=DEFINED_IN,
-                        to_entity=module_name,
-                        to_type=TYPE_MODULE,
-                        source_file=file_path,
-                        line_number=_line(name_node),
-                    ))
+                    defined(_text(name_node), _line(name_node))
 
             case "method_definition":
                 name_node = _child_of_type(node, "property_identifier")
                 if name_node:
-                    triples.append(CodeTriple(
-                        from_entity=_text(name_node),
-                        from_type=TYPE_FUNCTION,
-                        relation_type=DEFINED_IN,
-                        to_entity=module_name,
-                        to_type=TYPE_MODULE,
-                        source_file=file_path,
-                        line_number=_line(name_node),
-                    ))
+                    defined(_text(name_node), _line(name_node))
 
             case "variable_declarator":
                 # Capture: const foo = () => ...
@@ -724,15 +890,7 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
                 if value:
                     name_node = _child_of_type(node, "identifier")
                     if name_node:
-                        triples.append(CodeTriple(
-                            from_entity=_text(name_node),
-                            from_type=TYPE_FUNCTION,
-                            relation_type=DEFINED_IN,
-                            to_entity=module_name,
-                            to_type=TYPE_MODULE,
-                            source_file=file_path,
-                            line_number=_line(name_node),
-                        ))
+                        defined(_text(name_node), _line(name_node))
 
             case "import_statement":
                 source_node = _child_of_type(node, "string")
@@ -751,11 +909,27 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
                     ))
 
             case "call_expression":
-                callee = _extract_js_callee(node)
+                # CommonJS require('x') / dynamic import('x') → IMPORTS edge,
+                # so require-based codebases get the same import graph as ESM.
+                import_target = _extract_js_require_target(node)
+                if import_target is not None:
+                    triples.append(CodeTriple(
+                        from_entity=module_name,
+                        from_type=TYPE_MODULE,
+                        relation_type=IMPORTS,
+                        to_entity=import_target,
+                        to_type=TYPE_MODULE,
+                        source_file=file_path,
+                        line_number=_line(node),
+                    ))
+                    continue
+
+                callee, receiver, obj = _extract_js_call_parts(node)
                 if callee and _is_meaningful_callee(callee):
                     scope = _enclosing_js_scope(node)
                     caller = scope or module_name
                     caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
+                    receiver_type = _resolve_receiver_type(receiver, obj, node, type_env)
                     triples.append(CodeTriple(
                         from_entity=caller,
                         from_type=caller_type,
@@ -764,9 +938,113 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
                         to_type=TYPE_FUNCTION,
                         source_file=file_path,
                         line_number=_line(node),
+                        call_receiver=receiver,
+                        call_receiver_type=receiver_type,
                     ))
 
     return triples
+
+
+def _collect_js_exports(root: Node) -> set[str]:
+    """Names that reach the module's public API.
+
+    Recognizes three CommonJS/ESM patterns:
+      - `export function foo` / `export const foo` / `export { foo }`
+      - `module.exports = foo` / `exports.bar = foo` (RHS identifier is public)
+      - property assignments onto the exports object: if `module.exports = res`,
+        then every `res.method = ...` marks `method` public. Two passes handle
+        methods attached before the final `module.exports =` line.
+    """
+    exported: set[str] = set()
+    export_objects: set[str] = {"exports"}  # `exports.x = ...` is always public
+
+    # Pass 1: ES exports + discover the exports-object alias(es).
+    for node in _walk(root):
+        if node.type == "export_statement":
+            for ident in _walk(node):
+                if ident.type == "identifier" and ident.parent is not None and \
+                        ident.parent.type not in ("member_expression",):
+                    # declaration name or `export { name }` specifier
+                    exported.add(_text(ident))
+        elif node.type == "assignment_expression":
+            left, right = _assignment_sides(node)
+            if left is None:
+                continue
+            left_text = _text(left)
+            # module.exports = <ident>  →  <ident> is the exports object + public
+            if left_text in ("module.exports", "exports") and right is not None:
+                if right.type == "identifier":
+                    name = _text(right)
+                    exported.add(name)
+                    export_objects.add(name)
+        elif node.type == "variable_declarator":
+            # `var app = exports = module.exports = {}` — the declared name is an
+            # alias of the exports object, so its properties are public too.
+            name_node = _child_of_type(node, "identifier")
+            value = node.child_by_field_name("value")
+            if name_node is not None and value is not None and \
+                    value.type == "assignment_expression" and \
+                    "module.exports" in _text(value):
+                export_objects.add(_text(name_node))
+
+    # Pass 2: property assignments and defineGetter/defineProperty registrations
+    # onto any exports object → the property is public.
+    for node in _walk(root):
+        if node.type == "assignment_expression":
+            left, right = _assignment_sides(node)
+            if left is None or left.type != "member_expression":
+                continue
+            obj = left.child_by_field_name("object")
+            prop = left.child_by_field_name("property")
+            if obj is None or prop is None:
+                continue
+            if _text(obj) in export_objects:
+                exported.add(_text(prop))
+                if right is not None and right.type == "identifier":
+                    exported.add(_text(right))
+        elif node.type == "call_expression":
+            # defineGetter(obj, 'name', fn) / Object.defineProperty(obj, 'name', …)
+            # register a property on an exports object — treat 'name' as public.
+            exported |= _defined_property_exports(node, export_objects)
+
+    return exported
+
+
+def _defined_property_exports(call_node: Node, export_objects: set[str]) -> set[str]:
+    """Property names registered on an exports object via a define* helper.
+
+    Matches the common getter/property registration idiom
+    (`defineGetter(req, 'hostname', fn)`, `Object.defineProperty(res, 'x', …)`):
+    a define-style callee, a first argument that is a known exports object, and
+    a string-literal property name.
+    """
+    callee = _extract_js_call(call_node)[0] or ""
+    if "define" not in callee.lower():
+        return set()
+    args = _child_of_type(call_node, "arguments")
+    if args is None:
+        return set()
+    arg_nodes = [c for c in args.children if c.type not in (",", "(", ")")]
+    if not arg_nodes or _text(arg_nodes[0]) not in export_objects:
+        return set()
+    for a in arg_nodes[1:]:
+        if a.type == "string":
+            frag = _child_of_type(a, "string_fragment")
+            return {_text(frag) if frag else _text(a).strip("'\"`")}
+    return set()
+
+
+def _assignment_sides(node: Node) -> tuple[Node | None, Node | None]:
+    """Left and right operand of an assignment_expression, via named fields with
+    a positional fallback (grammar versions differ on field availability)."""
+    left = node.child_by_field_name("left")
+    right = node.child_by_field_name("right")
+    if left is None or right is None:
+        named = [c for c in node.children if c.type != "="]
+        if len(named) >= 2:
+            left = left or named[0]
+            right = right or named[-1]
+    return left, right
 
 
 def _enclosing_js_scope(node: Node) -> str | None:
@@ -792,16 +1070,150 @@ def _enclosing_js_scope(node: Node) -> str | None:
     return None
 
 
+def _extract_js_call(call_node: Node) -> tuple[str | None, str | None]:
+    """Return (callee_name, receiver_text) for a call_expression.
+
+    `foo()`      -> ("foo", None)
+    `app.handle()` -> ("handle", "app")
+    `this.router.handle()` -> ("handle", "this.router")
+    """
+    callee, receiver, _obj = _extract_js_call_parts(call_node)
+    return callee, receiver
+
+
+def _extract_js_call_parts(call_node: Node) -> tuple[str | None, str | None, Node | None]:
+    """Like _extract_js_call, but also returns the receiver's object node so the
+    caller can inspect it for type inference (e.g. an inline `new Foo()`)."""
+    if not call_node.children:
+        return None, None, None
+    fn_node = call_node.children[0]
+    if fn_node.type == "identifier":
+        return _text(fn_node), None, None
+    if fn_node.type == "member_expression":
+        prop = _child_of_type(fn_node, "property_identifier")
+        obj = fn_node.child_by_field_name("object")
+        receiver = _text(obj) if obj is not None else None
+        return (_text(prop) if prop else None), receiver, obj
+    return None, None, None
+
+
+def _new_expression_type(node: Node | None) -> str | None:
+    """Constructor name of a `new Foo(...)` expression, else None."""
+    if node is None or node.type != "new_expression":
+        return None
+    ctor = node.child_by_field_name("constructor")
+    if ctor is None:
+        ctor = _child_of_type(node, "identifier")
+    return _text(ctor) if ctor is not None else None
+
+
+def _type_from_annotation(ann: Node | None) -> str | None:
+    """Simple type name from a TypeScript `type_annotation` node.
+
+    Returns the identifier for plain named types (`Foo`, `Router`); skips
+    unions, generics, and built-ins that carry no useful disambiguation.
+    """
+    if ann is None:
+        return None
+    for desc in _walk(ann):
+        if desc.type in ("type_identifier",):
+            name = _text(desc)
+            if name and name not in ("any", "unknown", "void", "never"):
+                return name
+    return None
+
+
+def _js_type_env(root: Node) -> dict[str, str]:
+    """Best-effort variable → type map for a file.
+
+    Binds from two unambiguous, local signals:
+      - `var x = new Foo()`            -> x : Foo
+      - TS annotations `let x: Foo`,
+        `function f(x: Foo)`           -> x : Foo
+
+    A name bound to two different types anywhere in the file is dropped as
+    ambiguous — better to fall back to name-based handling than to mis-resolve.
+    """
+    types: dict[str, str] = {}
+    ambiguous: set[str] = set()
+
+    def bind(name: str | None, t: str | None) -> None:
+        if not name or not t:
+            return
+        if name in types and types[name] != t:
+            ambiguous.add(name)
+        else:
+            types[name] = t
+
+    for node in _walk(root):
+        if node.type == "variable_declarator":
+            name_node = _child_of_type(node, "identifier")
+            name = _text(name_node) if name_node else None
+            value = node.child_by_field_name("value")
+            bind(name, _new_expression_type(value))
+            bind(name, _type_from_annotation(_child_of_type(node, "type_annotation")))
+        elif node.type in ("required_parameter", "optional_parameter"):
+            pat = node.child_by_field_name("pattern") or _child_of_type(node, "identifier")
+            ann = _child_of_type(node, "type_annotation")
+            bind(_text(pat) if pat is not None else None, _type_from_annotation(ann))
+
+    for name in ambiguous:
+        types.pop(name, None)
+    return types
+
+
+def _enclosing_class_name(node: Node) -> str | None:
+    """Name of the nearest enclosing `class C { ... }`, for resolving `this`."""
+    current = node.parent
+    while current:
+        if current.type in ("class_declaration", "class"):
+            name_node = _child_of_type(current, "type_identifier") or \
+                _child_of_type(current, "identifier")
+            if name_node:
+                return _text(name_node)
+        current = current.parent
+    return None
+
+
+def _resolve_receiver_type(receiver: str | None, obj: Node | None,
+                           call_node: Node, env: dict[str, str]) -> str | None:
+    """Infer the receiver's type from an inline `new`, `this`, or the type env."""
+    if _new_expression_type(obj) is not None:
+        return _new_expression_type(obj)
+    if receiver in ("this",):
+        return _enclosing_class_name(call_node)
+    if receiver is not None and receiver in env:
+        return env[receiver]
+    return None
+
+
 def _extract_js_callee(call_node: Node) -> str | None:
+    """Back-compat shim: callee name only."""
+    return _extract_js_call(call_node)[0]
+
+
+def _extract_js_require_target(call_node: Node) -> str | None:
+    """Module string of a `require('x')` or dynamic `import('x')` call, else None.
+
+    Only the single static string-literal argument form is recognized; dynamic
+    paths (`require(base + name)`) have no static target and are skipped.
+    """
     if not call_node.children:
         return None
     fn_node = call_node.children[0]
-    if fn_node.type == "identifier":
-        return _text(fn_node)
-    if fn_node.type == "member_expression":
-        prop = _child_of_type(fn_node, "property_identifier")
-        return _text(prop) if prop else None
-    return None
+    is_require = fn_node.type == "identifier" and _text(fn_node) == "require"
+    is_dynamic_import = fn_node.type == "import"
+    if not (is_require or is_dynamic_import):
+        return None
+
+    args = _child_of_type(call_node, "arguments")
+    if args is None:
+        return None
+    str_node = _child_of_type(args, "string")
+    if str_node is None:
+        return None
+    frag = _child_of_type(str_node, "string_fragment")
+    return _text(frag) if frag else _text(str_node).strip("'\"`")
 
 
 # ---------------------------------------------------------------------------

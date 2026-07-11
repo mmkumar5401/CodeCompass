@@ -40,6 +40,66 @@ _ENTRY_POINT_PREFIXES = ("run_", "main", "handle_", "cmd_", "test_", "setup_", "
 _ENTRY_POINT_NAMES = {"main", "__main__", "handler", "lambda_handler", "application", "app"}
 
 
+def _strip_code_ext(path: str) -> str:
+    for ext in (".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".php"):
+        if path.endswith(ext):
+            return path[: -len(ext)]
+    return path
+
+
+def _import_resolves_to(import_str: str, from_file: str, target_file: str) -> bool:
+    """True if `import_str` written in `from_file` refers to `target_file`.
+
+    Resolves relative CommonJS/ESM specifiers (`./response`, `../lib/response`,
+    with an implicit `/index`) and dotted module names (`lib.response`) against
+    the target's extension-stripped path. Package imports (`router`, `express`)
+    never match a project file and return False.
+    """
+    if not import_str or not target_file:
+        return False
+    target_base = _strip_code_ext(target_file).replace("\\", "/")
+
+    if import_str.startswith("."):
+        from_dir = os.path.dirname(from_file)
+        resolved = os.path.normpath(os.path.join(from_dir, import_str)).replace("\\", "/")
+        # Direct match, or the specifier points at a directory whose index file
+        # is the target (`./lib` → `lib/index.js`).
+        return resolved == target_base or target_base == f"{resolved}/index"
+
+    if "." in import_str and "/" not in import_str:
+        # Dotted module name, e.g. "lib.response" → "lib/response".
+        dotted = import_str.replace(".", "/")
+        return dotted == target_base
+
+    return False
+
+
+def _receiver_matches(want: str, actual: str | None, actual_type: str | None = None) -> bool:
+    """True if a call's receiver satisfies a qualified query `want`.
+
+    Resolution order:
+      1. Inferred receiver type ("Router.handle" matches calls typed Router).
+         This is the strongest signal and is name-independent.
+      2. Self-references (`this`/`self`) — assumed to hit the queried object.
+      3. Receiver name — exact ("app") or trailing chain segment
+         ("this.router" endswith ".router").
+
+    Once a receiver's *type* is known and differs from `want`, a coincidental
+    name match is rejected — a `new Router()` call never satisfies "app.handle".
+    """
+    if actual_type is not None and actual_type == want:
+        return True
+    if actual in ("this", "self"):
+        return True
+    if actual_type is not None and actual_type != want:
+        return False
+    if actual is None:
+        return False
+    if actual == want:
+        return True
+    return actual.endswith("." + want)
+
+
 def _looks_like_entry_point(name: str, entity_type: str) -> bool:
     """Heuristic: names invoked by a runtime/dispatcher, not by static calls.
 
@@ -47,6 +107,10 @@ def _looks_like_entry_point(name: str, entity_type: str) -> bool:
     yet are clearly live. Modules are containers, never "dead" in the call sense.
     """
     if entity_type == "module":
+        return True
+    # Dunder methods (`__call__`, `__get__`, `__enter__`, …) are invoked by the
+    # language runtime / protocols, never by an explicit in-repo call site.
+    if name.startswith("__") and name.endswith("__") and len(name) > 4:
         return True
     lowered = name.lower()
     if lowered in _ENTRY_POINT_NAMES:
@@ -142,6 +206,10 @@ class LocalGraphClient:
             "project": project,
             "file": triple.source_file,
         })
+        # A symbol is public if any of its definitions is exported. Never let a
+        # later non-exported definition clear a flag an earlier one set.
+        if getattr(triple, "is_exported", False):
+            self.graph.nodes[from_id]["is_exported"] = True
 
         # Upsert to entity — only set language/kind/description if not already known
         self.graph.add_node(to_id)
@@ -156,11 +224,13 @@ class LocalGraphClient:
             existing["description"] = f"{language} {triple.to_type}"
 
         self.graph.add_edge(
-            from_id, 
-            to_id, 
-            type=rel_type, 
-            source_file=triple.source_file, 
-            line=triple.line_number, 
+            from_id,
+            to_id,
+            type=rel_type,
+            source_file=triple.source_file,
+            line=triple.line_number,
+            receiver=getattr(triple, "call_receiver", None),
+            receiver_type=getattr(triple, "call_receiver_type", None),
             created_at=_now()
         )
 
@@ -221,40 +291,160 @@ class LocalGraphClient:
     # ------------------------------------------------------------------
 
     def find_callers(self, entity_name: str, project: str, max_hops: int = 3) -> list[dict]:
-        """Return everything that calls/uses/references entity_name (reverse traversal)."""
-        target_id = f"{project}:{entity_name.lower()}"
+        """Return everything that calls/uses/references entity_name (reverse traversal).
+
+        `entity_name` may be a bare name ("handle") or receiver-qualified
+        ("app.handle" / "Router.handle"). When qualified, only call sites whose
+        receiver matches are returned — by inferred receiver *type* first
+        (`Router.handle` -> calls on a `new Router()`), then by receiver name.
+        This separates distinct same-named methods (app.handle vs router.handle)
+        that share a single graph node. Every returned row carries the call's
+        `receiver` and `receiver_type`, so an unqualified query still surfaces
+        the collision instead of hiding it.
+        """
+        want_receiver = None
+        lookup_name = entity_name
+        if "." in entity_name:
+            want_receiver, lookup_name = entity_name.rsplit(".", 1)
+
+        target_id = f"{project}:{lookup_name.lower()}"
         if target_id not in self.graph:
             return []
 
         results = []
         visited = {target_id}
         queue = [(target_id, 0)]
-        
+
         while queue:
             current_id, depth = queue.pop(0)
             if depth >= max_hops:
                 continue
-            
+
             for pred in self.graph.predecessors(current_id):
                 edges = self.graph.get_edge_data(pred, current_id)
-                is_relevant = any(
-                    edge.get("type") in {"CALLS", "USES_VAR", "REFERENCES"} 
-                    for edge in edges.values()
-                )
-                
-                if is_relevant and pred not in visited:
-                    node = self.graph.nodes[pred]
-                    if node.get("type") == "Entity":
-                        results.append({
-                            "caller_name": node.get("name"),
-                            "caller_type": node.get("entity_type"),
-                            "caller_file": node.get("file"),
-                            "depth": depth + 1
-                        })
-                        visited.add(pred)
-                        queue.append((pred, depth + 1))
-        
+                relevant_edges = [
+                    edge for edge in edges.values()
+                    if edge.get("type") in {"CALLS", "USES_VAR", "REFERENCES"}
+                ]
+                if not relevant_edges or pred in visited:
+                    continue
+
+                # Only apply receiver filtering to the direct (depth-0) edge into
+                # the queried symbol; deeper hops are transitive callers.
+                if want_receiver is not None and current_id == target_id:
+                    if not any(
+                        _receiver_matches(want_receiver, edge.get("receiver"),
+                                          edge.get("receiver_type"))
+                        for edge in relevant_edges
+                    ):
+                        continue
+
+                node = self.graph.nodes[pred]
+                if node.get("type") == "Entity":
+                    receiver = next(
+                        (e.get("receiver") for e in relevant_edges if e.get("receiver")),
+                        None,
+                    )
+                    receiver_type = next(
+                        (e.get("receiver_type") for e in relevant_edges if e.get("receiver_type")),
+                        None,
+                    )
+                    results.append({
+                        "caller_name": node.get("name"),
+                        "caller_type": node.get("entity_type"),
+                        "caller_file": node.get("file"),
+                        "receiver": receiver,
+                        "receiver_type": receiver_type,
+                        "depth": depth + 1
+                    })
+                    visited.add(pred)
+                    queue.append((pred, depth + 1))
+
         return sorted(results, key=lambda x: x["depth"])
+
+    def search_entities(self, query: str, project: str, limit: int = 30,
+                        kind: str | None = None) -> list[dict]:
+        """Find graph entities matching a keyword — the way in when you don't yet
+        know a symbol name.
+
+        Matches the query (case-insensitive) against each entity's name, file
+        path, and description. Any term may match (OR), and entities matching
+        more terms — and matching in the name rather than file/description — rank
+        highest, so the most on-point symbols come first.
+        Optional `kind` filters by entity_type (e.g. "function", "class").
+        Returns a lean list (name/kind/file/entity_type) to then feed into
+        impact/flow/deps.
+        """
+        terms = [t for t in query.lower().split() if t]
+        if not terms:
+            return []
+
+        scored = []
+        for _id, a in self.graph.nodes(data=True):
+            if a.get("type") != "Entity" or a.get("project") != project:
+                continue
+            if not a.get("file"):
+                continue
+            if kind and a.get("entity_type") != kind:
+                continue
+            name = (a.get("name") or "")
+            file = (a.get("file") or "")
+            desc = (a.get("description") or "")
+            hay_name = name.lower()
+            hay_rest = f"{file} {desc}".lower()
+            # any term may match (OR); score rewards name hits and more terms matched
+            score = 0
+            for t in terms:
+                if t == hay_name:
+                    score += 100
+                elif t in hay_name:
+                    score += 10
+                elif t in hay_rest:
+                    score += 1
+            if score == 0:
+                continue
+            scored.append((score, {
+                "name": name,
+                "entity_type": a.get("entity_type", ""),
+                "kind": a.get("kind", ""),
+                "file": file,
+            }))
+
+        scored.sort(key=lambda s: (-s[0], s[1]["file"], s[1]["name"]))
+        return [row for _s, row in scored[:limit]]
+
+    def symbol_map(self, project: str, include_tests: bool = False) -> dict:
+        """A compact index of the codebase for an agent to reason over.
+
+        Groups every source entity under its file as `{file: [names...]}` —
+        names only, no depth/kind/description bloat — so the whole map fits in a
+        few thousand tokens. The agent reads it once and uses its own judgment to
+        pick what's relevant to a vague task ("where would caching go?"), then
+        drills in with impact/flow/deps. This is the semantic-discovery entry
+        point that keyword `search` can't be: an LLM knows caching lives near the
+        request handler and response path even when nothing is named "cache".
+
+        `include_tests=False` (default) drops test/example files so the map shows
+        the actual implementation surface.
+        """
+        by_file: dict[str, list[str]] = {}
+        for _id, a in self.graph.nodes(data=True):
+            if a.get("type") != "Entity" or a.get("project") != project:
+                continue
+            f = a.get("file")
+            if not f:
+                continue
+            if not include_tests and ("test/" in f or "test\\" in f
+                                      or f.startswith("test") or "example" in f):
+                continue
+            name = a.get("name")
+            if name:
+                by_file.setdefault(f, [])
+                if name not in by_file[f]:
+                    by_file[f].append(name)
+        for f in by_file:
+            by_file[f].sort()
+        return dict(sorted(by_file.items()))
 
     def find_dependencies(self, file_path: str, project: str, max_hops: int = 3) -> list[dict]:
         """Return all modules imported (directly or transitively) by file_path."""
@@ -469,7 +659,9 @@ class LocalGraphClient:
                 "entity_type": attr.get("entity_type", ""),
                 "file": attr.get("file", ""),
             }
-            if _looks_like_entry_point(name, attr.get("entity_type", "")):
+            # Exported symbols and name-heuristic entry points are public API:
+            # having no in-repo caller is expected, not evidence of dead code.
+            if attr.get("is_exported") or _looks_like_entry_point(name, attr.get("entity_type", "")):
                 maybe_entry.append(entry)
             else:
                 dead.append(entry)
@@ -539,7 +731,33 @@ class LocalGraphClient:
                     visited.add(succ)
                     queue.append((succ, depth + 1))
 
+        # Files that import the target are affected when it changes, but that is
+        # a reverse edge the forward traversal above never follows. Add direct
+        # importers explicitly so `require('./target')` dependents are surfaced.
+        if target_file:
+            seen_files = {r["file"] for r in results}
+            for importer in self._direct_importers(target_file):
+                if importer != target_file and importer not in seen_files:
+                    results.append({"file": importer, "edge_type": "IMPORTS", "hops": 1})
+                    seen_files.add(importer)
+
         return results, target_file
+
+    def _direct_importers(self, target_file: str) -> list[str]:
+        """Source files with an IMPORTS edge whose module string resolves to
+        target_file. Handles both relative (`./response`) and dotted-module
+        (`lib.response`) import spellings."""
+        importers: list[str] = []
+        for _u, v, data in self.graph.edges(data=True):
+            if data.get("type") != "IMPORTS":
+                continue
+            from_file = data.get("source_file")
+            if not from_file:
+                continue
+            import_str = self.graph.nodes[v].get("name", "")
+            if _import_resolves_to(import_str, from_file, target_file):
+                importers.append(from_file)
+        return sorted(set(importers))
 
 def get_client(project_path: str) -> LocalGraphClient:
     """Return a LocalGraphClient for the project at project_path."""

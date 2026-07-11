@@ -25,8 +25,9 @@ console = Console()
 _CODECOMPASS_START = "<!-- codecompass-code-graph-start -->"
 _CODECOMPASS_END = "<!-- codecompass-code-graph-end -->"
 _CODECOMPASS_READ_INSTRUCTION = (
-    "Read `.codecompass` before making any changes or before reading any file. "
-    "If you think codecompass will help in any way, use it."
+    "Orient through the code graph first: start from an entry point, see what's "
+    "there, then trace its flow and dependencies — rather than blind grepping. "
+    "Reach for grep/cat when you already know the string or symbol, or to verify."
 )
 
 
@@ -121,13 +122,14 @@ def _ensure_gitignore(repo_path: str) -> None:
             f.write(entry + "\n")
 
 
-# The PreToolUse hook that forces codecompass for codebase navigation. Blocks the
-# Grep and Glob tools outright and catches the common code-reading shell commands
-# (cat/grep/rg/sed/awk/head/tail/less). Read is intentionally left alone: it is the
-# terminal step of the workflow ("find the entity with codecompass, then read it"),
-# and a stateless hook cannot tell whether codecompass was consulted first.
+# The PreToolUse hook that blocks code *search* and whole-file dumps, but allows
+# targeted reads. Discovery must go through the graph (--map / --search to find
+# what's relevant, then --flow/--impact/--deps to trace), so raw text search
+# (grep/rg and the Grep/Glob tools) is blocked. Whole-file `cat` is blocked too:
+# read targeted slices with the Read tool (or sed -n/head/tail) once you know
+# what to open.
 _CLAUDE_HOOK_SCRIPT = r'''#!/usr/bin/env python3
-"""PreToolUse hook: force codecompass for codebase navigation instead of raw file search.
+"""PreToolUse hook: block code search and whole-file dumps; allow targeted reads.
 
 Installed by `codecompass init`. Safe to edit — init will not overwrite an existing copy.
 """
@@ -135,19 +137,16 @@ import json
 import re
 import sys
 
-# Tools that codecompass unambiguously replaces for code navigation/search.
+# Search tools/commands and whole-file dumps — blocked. Use the graph to
+# discover, then read targeted slices.
 _BLOCKED_TOOLS = {"Grep", "Glob"}
-# Code-reading shell commands. Read a specific known file via the Read tool instead.
-_BLOCKED_SHELL_RE = re.compile(
-    r"(?:^|[;|&]|&&|\|\|)\s*(cat|grep|rg|sed|awk|head|tail|less)(?:\s|$)"
-)
+_BLOCKED_SHELL_RE = re.compile(r"(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)")
 
 _REASON = (
-    "Codebase navigation must use codecompass, not {what}. "
-    "Use `codecompass query --tree|--blast-radius|--impact|--deps|--flow` to find "
-    "the entity/file, then `read` it directly. "
-    "(`ls`/`find` are fine for non-code exploration — build output, "
-    "confirming a file was created, listing fixtures/assets.)"
+    "Don't use {what}. Discover through the graph — `codecompass query --map` "
+    "(compact index to reason over) or `--search <kw>`, then `--flow`/`--impact`/"
+    "`--deps` to trace — then read the specific slice you need with the Read tool "
+    "(or `sed -n`/`head`/`tail`), not a whole-file dump."
 )
 
 
@@ -163,8 +162,7 @@ def main() -> None:
     if tool_name == "Bash":
         command = str(tool_input.get("command", ""))
         if _BLOCKED_SHELL_RE.search(command):
-            print(_REASON.format(what="cat/grep/rg/sed/awk/head/tail/less shell commands"),
-                  file=sys.stderr)
+            print(_REASON.format(what="grep/rg/cat"), file=sys.stderr)
             sys.exit(2)
 
     sys.exit(0)
@@ -336,13 +334,14 @@ human-readable `description`. Use it as your primary navigation tool.
 
 All commands default to the current directory — run them from the project root.
 
-### Rules — MUST follow
+### Rules
 
-0. **Never use `cat`, `grep`, or `rg` to search or read code content.**
-   Use the `codecompass query` commands below to find entities, structure, and
-   relationships instead — they know the real dependency graph; grepping does
-   not. Only `read` a specific file once codecompass has told you it matters.
-   `ls`/`find` are fine for non-code exploration — see the decision rule below.
+0. **Orient before you search.** When you don't yet know where something lives,
+   start from the graph — `codecompass query --tree` to see what's where, then
+   `--flow`/`--impact`/`--deps` to trace from an entry point — instead of blind
+   grepping. Once you know the string/symbol you want, or need to confirm a
+   result, grep/cat/read are fine. Pick the tool that fits; the graph is the
+   default reflex for structure/relationship questions, not a hard requirement.
 1. **Before editing any file**, run `--blast-radius` on it to see what depends on it:
    ```bash
    codecompass query --blast-radius <file_or_symbol>

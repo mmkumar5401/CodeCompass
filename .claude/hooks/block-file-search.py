@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: force codecompass for codebase navigation instead of raw file search."""
+"""PreToolUse hook: block code *search* and whole-file dumps; allow targeted reads.
+
+Discovery must go through the graph — `codecompass query --map`/`--search` to
+find what's relevant, then `--flow`/`--impact`/`--deps` to trace it — so raw text
+search (grep/rg and the Grep/Glob tools) is blocked. Whole-file `cat` is blocked
+too: read targeted slices with the Read tool (or `sed -n`/`head`/`tail`) once you
+know what to open, rather than dumping an entire file.
+"""
 import json
 import re
 import sys
 
-# Only block what codecompass unambiguously replaces: searching/reading code
-# content. `ls`/`find` are left alone — they have legitimate non-code uses
-# (checking build output, confirming a generated file exists, listing test
-# fixtures) that the graph doesn't cover. Read is also left alone: it is the
-# terminal step ("find the entity with codecompass, then read it").
+# Search tools/commands and whole-file dumps — blocked. Use the graph to
+# discover, then read targeted slices.
 _BLOCKED_TOOLS = {"Grep", "Glob"}
-_BLOCKED_SHELL_RE = re.compile(
-    r"(?:^|[;|&]|&&|\|\|)\s*(cat|grep|rg|sed|awk|head|tail|less)(?:\s|$)"
-)
+_BLOCKED_SHELL_RE = re.compile(r"(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)")
 
 _REASON = (
-    "Codebase navigation must use codecompass, not {what}. "
-    "Use `codecompass query --tree|--blast-radius|--impact|--deps|--flow` to find "
-    "the entity/file, then `read` it directly. "
-    "(`ls`/`find` are fine for non-code exploration — build output, "
-    "confirming a file was created, listing fixtures/assets.)"
+    "Don't use {what}. Discover through the graph — `codecompass query --map` "
+    "(compact index to reason over) or `--search <kw>`, then `--flow`/`--impact`/"
+    "`--deps` to trace — then read the specific slice you need with the Read tool "
+    "(or `sed -n`/`head`/`tail`), not a whole-file dump."
 )
 
 
@@ -35,8 +36,7 @@ def main() -> None:
     if tool_name == "Bash":
         command = str(tool_input.get("command", ""))
         if _BLOCKED_SHELL_RE.search(command):
-            print(_REASON.format(what="cat/grep/rg/sed/awk/head/tail/less shell commands"),
-                  file=sys.stderr)
+            print(_REASON.format(what="grep/rg/cat"), file=sys.stderr)
             sys.exit(2)
 
     sys.exit(0)
