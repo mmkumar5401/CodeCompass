@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.6.1] - 2026-07-11
+
+### Changed
+- `AGENTS.md` broadens the re-ingest trigger from "after creating or deleting
+  files" to "after any code change" (edits, additions, deletions, renames,
+  refactors), so the graph stays current after routine edits too.
+
+## [2.6.0] - 2026-07-11
+
+### Added
+- `codecompass init` (CLI and MCP) now scaffolds a `.claude/` enforcement
+  layer alongside `.codecompass/`: `_ensure_claude_hooks()` writes
+  `.claude/hooks/block-file-search.py` and merges the `PreToolUse` matchers
+  (Bash, Grep, Glob) into `.claude/settings.json` without clobbering existing
+  user hooks or settings.
+- The installed hook blocks the Grep/Glob tools and code-reading shell
+  commands (`cat`/`grep`/`rg`/`sed`/`awk`/`head`/`tail`/`less`) while leaving
+  `ls`/`find`/`Read` open, so codebase navigation routes through the graph.
+- MCP server (`mcp_server.py`) landed as `codecompass-mcp`, with tests.
+
 ## [2.5.0] - 2026-07-04
 
 ### Added
