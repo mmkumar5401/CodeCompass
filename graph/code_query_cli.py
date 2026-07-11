@@ -51,6 +51,17 @@ def fetch_impact(entity_name: str, repo_path: str, project: str, max_hops: int =
     return {"entity": entity_name, "callers": rows, "updated_at": updated_at}
 
 
+def fetch_grep(pattern: str, repo_path: str, project: str, field: str = "all",
+               ignore_case: bool = True, limit: int = 100) -> dict:
+    """Regex-search the graph — 'grep' over indexed entities, not file lines."""
+    client = get_client(repo_path)
+    try:
+        return client.grep_graph(pattern, project, field=field,
+                                 ignore_case=ignore_case, limit=limit)
+    finally:
+        client.close()
+
+
 def fetch_search(query: str, repo_path: str, project: str, limit: int = 30,
                  kind: str | None = None) -> dict:
     """Search the graph for entities matching a keyword — the discovery entry point."""
@@ -322,6 +333,16 @@ def main() -> None:
         run_flow(args.flow, repo_path, project, max_hops=args.hops, rich=rich,
                  output=args.flow_output, include_external=args.include_external,
                  fmt=args.format)
+    elif args.flow_summary:
+        run_flow(args.flow_summary, repo_path, project, max_hops=args.hops, rich=rich,
+                 output=args.flow_output, include_external=args.include_external,
+                 fmt=args.format if args.format != "drawio" else "mermaid")
+    elif args.map:
+        print(json.dumps(fetch_map(repo_path, project), indent=2))
+    elif args.search:
+        print(json.dumps(fetch_search(args.search, repo_path, project), indent=2))
+    elif args.grep:
+        print(json.dumps(fetch_grep(args.grep, repo_path, project), indent=2))
     elif args.dead_code:
         run_dead_code(repo_path, project, rich=rich, show_entrypoints=args.include_entrypoints)
     elif args.tree:
@@ -999,6 +1020,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--styles", metavar="ELEMENT")
     parser.add_argument("--trace", metavar="ENTITY")
     parser.add_argument("--flow", metavar="ENTITY")
+    parser.add_argument("--flow-summary", metavar="ENTITY",
+                        help="Flow trace + rendered narration (mermaid by default) for a human")
+    parser.add_argument("--map", action="store_true",
+                        help="Compact {file: [symbols]} index to reason over during discovery")
+    parser.add_argument("--search", metavar="KEYWORDS",
+                        help="Keyword search over entity names/files/descriptions")
+    parser.add_argument("--grep", metavar="REGEX",
+                        help="Regex search over graph entities (grep for the graph)")
     parser.add_argument("--flow-output", metavar="PATH", default=None)
     parser.add_argument("--include-external", action="store_true",
                         help="Include external/stdlib symbols in --flow output")

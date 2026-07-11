@@ -28,6 +28,7 @@ from graph.code_query_cli import (
     fetch_deps,
     fetch_flow,
     fetch_flow_summary,
+    fetch_grep,
     fetch_impact,
     fetch_map,
     fetch_search,
@@ -152,6 +153,23 @@ def styles(element: str) -> dict:
     repo = _active_repo()
     _ensure_initialized(repo)
     return fetch_styles(element, repo, os.path.basename(repo))
+
+
+@mcp.tool()
+def grep(pattern: str, field: str = "all", ignore_case: bool = True, limit: int = 100) -> dict:
+    """Regex-search the graph — 'grep' over indexed entities instead of file text.
+
+    Matches `pattern` (a Python regex) against each entity's name / file / kind /
+    description (or one `field`), returning matching entities with the field that
+    hit. This is the graph-native replacement for grepping source: full regex
+    power over the symbols the graph knows about. Use it to find symbols by
+    pattern (`^test_`, `.*Adapter$`, `handle|dispatch`), then drill in with
+    impact/flow/deps.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    return fetch_grep(pattern, repo, os.path.basename(repo), field=field,
+                      ignore_case=ignore_case, limit=limit)
 
 
 @mcp.tool()

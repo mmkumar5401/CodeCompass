@@ -339,6 +339,39 @@ def test_python_public_method_marked_exported():
     assert by_name.get("_private") is False, "underscore method is not exported"
 
 
+def test_graph_grep_regex():
+    triples = [
+        CodeTriple("HTTPAdapter", "class", "DEFINED_IN", "m", "module", "adapters.py", 1),
+        CodeTriple("get_adapter", "function", "DEFINED_IN", "m", "module", "sessions.py", 5),
+        CodeTriple("send", "function", "DEFINED_IN", "m", "module", "sessions.py", 9),
+    ]
+    client = _client()
+    _write(client, triples)
+    # anchored regex on name
+    r = client.grep_graph("^get_", "proj", field="name")
+    assert {m["name"] for m in r["matches"]} == {"get_adapter"}
+    # alternation across name
+    r2 = client.grep_graph("Adapter|send", "proj", field="name")
+    assert {m["name"] for m in r2["matches"]} == {"HTTPAdapter", "get_adapter", "send"}
+    # field filter
+    r3 = client.grep_graph("sessions", "proj", field="file")
+    assert {m["name"] for m in r3["matches"]} == {"get_adapter", "send"}
+    # bad regex is reported, not raised
+    assert "error" in client.grep_graph("(", "proj")
+
+
+def test_python_return_type_inference():
+    src = ("class Session:\n"
+           "    def get_adapter(self, url) -> HTTPAdapter:\n"
+           "        return self.a\n"
+           "    def send(self, req):\n"
+           "        adapter = self.get_adapter(req.url)\n"
+           "        return adapter.send(req)\n")
+    triples = _parse_py(src)
+    call = next(t for t in triples if t.relation_type == "CALLS" and t.to_entity == "send")
+    assert call.call_receiver_type == "HTTPAdapter", "return type of get_adapter should type `adapter`"
+
+
 def test_python_public_module_function_marked_exported():
     src = "def has_app_context():\n    return True\n\ndef _helper():\n    pass\n"
     triples = _parse_py(src)

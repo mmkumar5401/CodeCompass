@@ -334,55 +334,50 @@ human-readable `description`. Use it as your primary navigation tool.
 
 All commands default to the current directory — run them from the project root.
 
-### Rules
+### The loop: discover → trace → read → edit
 
-0. **Orient before you search.** When you don't yet know where something lives,
-   start from the graph — `codecompass query --tree` to see what's where, then
-   `--flow`/`--impact`/`--deps` to trace from an entry point — instead of blind
-   grepping. Once you know the string/symbol you want, or need to confirm a
-   result, grep/cat/read are fine. Pick the tool that fits; the graph is the
-   default reflex for structure/relationship questions, not a hard requirement.
-1. **Before editing any file**, run `--blast-radius` on it to see what depends on it:
-   ```bash
-   codecompass query --blast-radius <file_or_symbol>
-   ```
-2. **Before calling or importing a symbol you haven't read**, run `--impact` to
-   understand its downstream effects:
-   ```bash
-   codecompass query --impact <symbol>
-   ```
-3. **After creating or deleting files**, re-ingest so the graph stays current:
-   ```bash
-   codecompass ingest-code
-   ```
-4. **Never skip step 1.** Reading a file without checking its blast radius first
-   means you may miss callers, importers, or CSS/HTML dependents.
+1. **Discover** — find the symbol(s) you care about (pick by what you have):
 
-### Graph vs. `ls`/`find` — how to decide
+   | You have… | Use | Example |
+   |---|---|---|
+   | a feature request that names a concept ("session timeout", "adapter retries") | `--grep <concept>` first | `--grep "^Session"` — scope straight to it (cheap); only fall back to `--map` if the concept isn't a symbol name |
+   | a regex / name pattern | `--grep <regex>` | `--grep "^get_"`, `--grep ".*Adapter$"` |
+   | keywords | `--search <words>` | `--search "session cookie"` |
+   | a truly nameless need ("where does caching go?" with no `cache` symbol) | `--map` | read the compact index and reason about where it belongs |
+   | the full layout | `--tree` | (large — prefer `--map` for reasoning) |
 
-Use **codecompass** when the question is about code structure or relationships:
-"what calls this", "what depends on this file", "what does this module do",
-"how does this flow work", "is this dead code". The graph knows the real
-dependency edges; a directory listing does not.
+2. **Trace** — understand relationships around a known symbol/file:
 
-Use **`ls`/`find`** when the question has nothing to do with code
-relationships: confirming a generated/output file exists, listing a
-build/dist/log directory, checking test fixtures or assets, or any path the
-graph doesn't index. These are fine — don't force codecompass onto questions
-it can't answer.
+   | Question | Use |
+   |---|---|
+   | who calls / would break if I change this symbol? | `--impact <symbol>` |
+   | what files are affected if I edit this file? | `--blast-radius <file>` |
+   | what does this file depend on? | `--deps <file>` |
+   | what does this entry point call, step by step? | `--flow <symbol>` (lean structure) |
+   | explain a flow to a human (diagram + narration) | `--flow-summary <symbol>` |
+   | is anything unused? | `--dead-code` |
 
-### Available queries
+3. **Read** the specific slice the graph pointed you to (Read tool / `sed -n`),
+   not the whole file.
 
-| Command | Purpose |
-|---|---|
-| `codecompass query --blast-radius <file_or_symbol>` | All nodes affected if you change this |
-| `codecompass query --impact <symbol>` | Downstream callers / importers of a symbol |
-| `codecompass query --deps <file>` | What this file depends on |
-| `codecompass query --tree` | Full project structure with entity types |
-| `codecompass query --dead-code` | Find functions/classes with no caller or importer (candidates to remove) |
-| `codecompass query --flow <entry_symbol>` | Trace a call/import flow from an entry point (draw.io diagram by default) |
-| `codecompass query --flow <entry_symbol> --format mermaid` | Same trace as a Markdown mermaid flowchart (renders on GitHub) |
-| `codecompass query --flow <entry_symbol> --format json` | Same trace enriched with signatures, docstrings, and source snippets |
+4. **Edit** — and before editing, `--impact`/`--blast-radius` the target so you
+   don't miss a caller or dependent. After adding/deleting files, re-ingest.
+
+### Reading the results
+
+- `--impact` rows carry `resolved`: `true` = the receiver was statically typed
+  (trust it); `false` = receiver type unknown, this call *might* target the
+  symbol (verify by reading the slice at `caller_file:line`).
+- `--flow` is lean (structure only). Start at `hops=1` and only go deeper along
+  the one path you actually need — deep hops on a high-fan-out symbol are large.
+- `--dead-code` is a candidate list — static analysis misses dynamic dispatch,
+  so read each before removing.
+
+### Graph vs. `ls`/`find`
+
+`ls`/`find` are for non-code paths the graph doesn't index (build/dist/log
+output, fixtures, confirming a generated file exists). For anything about code
+structure or relationships, use the graph.
 
 ### Explaining how something works
 

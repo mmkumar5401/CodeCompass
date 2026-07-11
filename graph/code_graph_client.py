@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import networkx as nx
 from datetime import datetime, timezone
 from typing import Optional, Any
@@ -34,6 +35,15 @@ _ALLOWED_REL_TYPES = frozenset({
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _entity_id(project: str, name: str, file: str | None) -> str:
+    """Node id for an entity — file-qualified so same-named entities in different
+    files stay distinct. Case is preserved so `Session` (class) and `session`
+    (function) don't collide. External/module targets with no file are name-only."""
+    if file:
+        return f"{project}:{file}:{name}"
+    return f"{project}:{name}"
 
 
 _ENTRY_POINT_PREFIXES = ("run_", "main", "handle_", "cmd_", "test_", "setup_", "teardown_")
@@ -186,9 +196,14 @@ class LocalGraphClient:
     # Entity nodes and semantic edges (from code triples)
     # ------------------------------------------------------------------
 
-    def write_code_triple(self, triple: CodeTriple, file_node_id: str, project: str) -> None:
-        from_id = f"{project}:{triple.from_entity.lower()}"
-        to_id = f"{project}:{triple.to_entity.lower()}"
+    def write_code_triple(self, triple: CodeTriple, file_node_id: str, project: str,
+                          from_id: str | None = None, to_id: str | None = None) -> None:
+        # from_id/to_id are the resolved (file-qualified) node ids from the batch
+        # writer; fall back to name-only for any direct/legacy caller.
+        if from_id is None:
+            from_id = f"{project}:{triple.from_entity}"
+        if to_id is None:
+            to_id = f"{project}:{triple.to_entity}"
         rel_type = triple.relation_type if triple.relation_type in _ALLOWED_REL_TYPES else "RELATION"
 
         ext = os.path.splitext(triple.source_file)[1].lower()
@@ -236,16 +251,52 @@ class LocalGraphClient:
 
         self.graph.add_edge(file_node_id, from_id, type="CONTAINS")
 
+    def _resolve_to_id(self, triple: CodeTriple, project: str,
+                       defs_by_name: dict, class_file: dict) -> str:
+        """Resolve a triple's callee/target to a specific definition node when we
+        can, else a name-only bucket. Uses the captured receiver type to pick the
+        right same-named method (self.send() in a Session method -> the send
+        defined alongside class Session)."""
+        name = triple.to_entity
+        if triple.relation_type == "DEFINED_IN":
+            return f"{project}:{name}"  # module container — name-only
+        cands = defs_by_name.get(name)
+        if cands:
+            rt = getattr(triple, "call_receiver_type", None)
+            if rt:
+                cf = class_file.get(rt)
+                if cf:
+                    for nid, f in cands:
+                        if f == cf:
+                            return nid
+            if len(cands) == 1:
+                return cands[0][0]
+        # ambiguous or external → name-only bucket (edge not lost)
+        return f"{project}:{name}"
+
     def write_code_triples_batch(
-        self, 
-        triples: list[CodeTriple], 
-        file_id_map: dict[str, str], 
+        self,
+        triples: list[CodeTriple],
+        file_id_map: dict[str, str],
         project: str
     ) -> int:
+        # Pass 1: index every definition so calls can resolve to a specific one.
+        defs_by_name: dict[str, list] = {}
+        class_file: dict[str, str] = {}
+        for t in triples:
+            if t.relation_type == "DEFINED_IN":
+                nid = _entity_id(project, t.from_entity, t.source_file)
+                defs_by_name.setdefault(t.from_entity, []).append((nid, t.source_file))
+                if t.from_type == "class":
+                    class_file.setdefault(t.from_entity, t.source_file)
+
+        # Pass 2: write nodes/edges with resolved, file-qualified ids.
         for triple in triples:
             file_id = file_id_map.get(triple.source_file, "")
-            self.write_code_triple(triple, file_id, project)
-        
+            from_id = _entity_id(project, triple.from_entity, triple.source_file)
+            to_id = self._resolve_to_id(triple, project, defs_by_name, class_file)
+            self.write_code_triple(triple, file_id, project, from_id=from_id, to_id=to_id)
+
         self.save()
         return len(triples)
 
@@ -290,30 +341,59 @@ class LocalGraphClient:
     # Traversal queries used by code_query_cli
     # ------------------------------------------------------------------
 
+    def _resolve_query_nodes(self, entity_name: str, project: str) -> list[str]:
+        """Resolve a bare or receiver-qualified name to the node id(s) it refers
+        to. `Session.send` → the `send` node in the file where class `Session` is
+        defined; `send` → every `send` node. Includes the name-only bucket id
+        when present (unresolved/ambiguous calls land there)."""
+        qualifier = None
+        name = entity_name
+        if "." in entity_name:
+            qualifier, name = entity_name.rsplit(".", 1)
+        name_l = name.lower()
+
+        matches = [
+            n for n, a in self.graph.nodes(data=True)
+            if a.get("type") == "Entity" and (a.get("name") or "").lower() == name_l
+        ]
+        # name-only bucket (unresolved calls land here) is matched by its name attr,
+        # but sort it last so flow/trace pick a real definition as the start.
+        matches.sort(key=lambda n: self.graph.nodes[n].get("file") is None)
+
+        if qualifier and matches:
+            cls_files = {
+                a.get("file") for n, a in self.graph.nodes(data=True)
+                if a.get("type") == "Entity" and a.get("entity_type") == "class"
+                and (a.get("name") or "").lower() == qualifier.lower() and a.get("file")
+            }
+            pref = [n for n in matches if self.graph.nodes[n].get("file") in cls_files]
+            if pref:
+                return pref
+        return matches
+
     def find_callers(self, entity_name: str, project: str, max_hops: int = 3) -> list[dict]:
         """Return everything that calls/uses/references entity_name (reverse traversal).
 
         `entity_name` may be a bare name ("handle") or receiver-qualified
-        ("app.handle" / "Router.handle"). When qualified, only call sites whose
-        receiver matches are returned — by inferred receiver *type* first
-        (`Router.handle` -> calls on a `new Router()`), then by receiver name.
-        This separates distinct same-named methods (app.handle vs router.handle)
-        that share a single graph node. Every returned row carries the call's
-        `receiver` and `receiver_type`, so an unqualified query still surfaces
-        the collision instead of hiding it.
+        ("app.handle" / "Router.handle"). Node ids are file-qualified, so distinct
+        same-named methods are distinct nodes; a qualified query resolves to the
+        one defined alongside the named class. The receiver filter still applies
+        for calls that landed in a shared name-only bucket (genuinely ambiguous).
+        Every returned row carries the call's `receiver`/`receiver_type` and the
+        real call-site file+line.
         """
         want_receiver = None
-        lookup_name = entity_name
         if "." in entity_name:
-            want_receiver, lookup_name = entity_name.rsplit(".", 1)
+            want_receiver, _ = entity_name.rsplit(".", 1)
 
-        target_id = f"{project}:{lookup_name.lower()}"
-        if target_id not in self.graph:
+        targets = self._resolve_query_nodes(entity_name, project)
+        if not targets:
             return []
+        target_set = set(targets)
 
         results = []
-        visited = {target_id}
-        queue = [(target_id, 0)]
+        visited = set(targets)
+        queue = [(t, 0) for t in targets]
 
         while queue:
             current_id, depth = queue.pop(0)
@@ -331,7 +411,7 @@ class LocalGraphClient:
 
                 # Only apply receiver filtering to the direct (depth-0) edge into
                 # the queried symbol; deeper hops are transitive callers.
-                if want_receiver is not None and current_id == target_id:
+                if want_receiver is not None and current_id in target_set:
                     if not any(
                         _receiver_matches(want_receiver, edge.get("receiver"),
                                           edge.get("receiver_type"))
@@ -349,18 +429,96 @@ class LocalGraphClient:
                         (e.get("receiver_type") for e in relevant_edges if e.get("receiver_type")),
                         None,
                     )
+                    # The caller NODE is keyed by name only, so when two functions
+                    # share a name its "file" is last-writer-wins (a merge). The
+                    # CALLS edge, however, records where THIS call actually is —
+                    # use it so each caller row points at the real call site with a
+                    # line number, not the merged node's file.
+                    call_edge = next(
+                        (e for e in relevant_edges if e.get("source_file")), relevant_edges[0]
+                    )
                     results.append({
                         "caller_name": node.get("name"),
                         "caller_type": node.get("entity_type"),
-                        "caller_file": node.get("file"),
+                        "caller_file": call_edge.get("source_file") or node.get("file"),
+                        "line": call_edge.get("line"),
                         "receiver": receiver,
                         "receiver_type": receiver_type,
+                        "resolved": True,
                         "depth": depth + 1
                     })
                     visited.add(pred)
                     queue.append((pred, depth + 1))
 
-        return sorted(results, key=lambda x: x["depth"])
+        # Qualified query (Type.method): also surface the name-only bucket's
+        # direct callers — calls whose receiver couldn't be statically typed
+        # (e.g. `adapter = self.get_adapter(url); adapter.send()`). They MAY hit
+        # this method, so we don't drop them, but flag resolved=False rather than
+        # claim false precision. An unqualified query already includes them.
+        if want_receiver is not None:
+            method = entity_name.rsplit(".", 1)[1]
+            bucket = f"{project}:{method}"
+            if bucket in self.graph and bucket not in target_set:
+                for pred in self.graph.predecessors(bucket):
+                    if pred in visited:
+                        continue
+                    rel = [e for e in self.graph.get_edge_data(pred, bucket).values()
+                           if e.get("type") in {"CALLS", "USES_VAR", "REFERENCES"}]
+                    node = self.graph.nodes[pred]
+                    if not rel or node.get("type") != "Entity":
+                        continue
+                    ce = next((e for e in rel if e.get("source_file")), rel[0])
+                    results.append({
+                        "caller_name": node.get("name"),
+                        "caller_type": node.get("entity_type"),
+                        "caller_file": ce.get("source_file") or node.get("file"),
+                        "line": ce.get("line"),
+                        "receiver": next((e.get("receiver") for e in rel if e.get("receiver")), None),
+                        "receiver_type": None,
+                        "resolved": False,
+                        "depth": 1,
+                    })
+                    visited.add(pred)
+
+        return sorted(results, key=lambda x: (not x.get("resolved", True), x["depth"]))
+
+    def grep_graph(self, pattern: str, project: str, field: str = "all",
+                   ignore_case: bool = True, limit: int = 100) -> dict:
+        """Regex-search the graph — 'grep' for entities instead of file lines.
+
+        Matches `pattern` against each entity's name / file / kind / description
+        (or a single `field`), returning the matching entities with the field
+        that hit and the matched text. This is the graph-native replacement for
+        grepping source: full regex power, but over the indexed symbols rather
+        than raw text.
+        """
+        flags = re.IGNORECASE if ignore_case else 0
+        try:
+            rx = re.compile(pattern, flags)
+        except re.error as exc:
+            return {"pattern": pattern, "error": f"invalid regex: {exc}", "matches": [], "count": 0}
+
+        fields = ["name", "file", "kind", "description"] if field == "all" else [field]
+        matches = []
+        for _n, a in self.graph.nodes(data=True):
+            if a.get("type") != "Entity" or a.get("project") != project:
+                continue
+            for f in fields:
+                val = str(a.get(f) or "")
+                m = rx.search(val) if val else None
+                if m:
+                    matches.append({
+                        "name": a.get("name"),
+                        "kind": a.get("kind"),
+                        "file": a.get("file"),
+                        "matched_field": f,
+                        "match": m.group(0),
+                    })
+                    break
+            if len(matches) >= limit:
+                break
+        matches.sort(key=lambda r: (r["file"] or "", r["name"] or ""))
+        return {"pattern": pattern, "matches": matches, "count": len(matches)}
 
     def search_entities(self, query: str, project: str, limit: int = 30,
                         kind: str | None = None) -> list[dict]:
@@ -482,22 +640,19 @@ class LocalGraphClient:
 
     def find_styles(self, element_name: str, project: str) -> list[dict]:
         """Return all CSS selectors that style element_name."""
-        target_id = f"{project}:{element_name.lower()}"
-        if target_id not in self.graph:
-            return []
-            
         results = []
-        for pred in self.graph.predecessors(target_id):
-            edges = self.graph.get_edge_data(pred, target_id)
-            for key, edge in edges.items():
-                if edge.get("type") == "STYLES":
-                    node = self.graph.nodes[pred]
-                    results.append({
-                        "selector": node.get("name"),
-                        "source_file": node.get("file"),
-                        "line": edge.get("line")
-                    })
-        
+        for target_id in self._resolve_query_nodes(element_name, project):
+            for pred in self.graph.predecessors(target_id):
+                edges = self.graph.get_edge_data(pred, target_id)
+                for key, edge in edges.items():
+                    if edge.get("type") == "STYLES":
+                        node = self.graph.nodes[pred]
+                        results.append({
+                            "selector": node.get("name"),
+                            "source_file": node.get("file"),
+                            "line": edge.get("line")
+                        })
+
         return sorted(results, key=lambda x: x["selector"])
 
     def trace_flow(self, start_name: str, project: str, max_hops: int = 6,
@@ -506,9 +661,10 @@ class LocalGraphClient:
         """BFS from start_name along CALLS/IMPORTS edges. Returns nodes + edges for rendering."""
         if edge_types is None:
             edge_types = frozenset({"CALLS", "IMPORTS"})
-        start_id = f"{project}:{start_name.lower()}"
-        if start_id not in self.graph:
+        starts = self._resolve_query_nodes(start_name, project)
+        if not starts:
             return {"nodes": [], "edges": []}
+        start_id = starts[0]
 
         flow_nodes: dict[str, dict] = {}
         flow_edges: list[dict] = []
@@ -563,9 +719,10 @@ class LocalGraphClient:
 
     def trace_calls(self, start_name: str, project: str, max_hops: int = 4) -> list[dict]:
         """Trace the call chain forward from start_name up to max_hops deep."""
-        start_id = f"{project}:{start_name.lower()}"
-        if start_id not in self.graph:
+        starts = self._resolve_query_nodes(start_name, project)
+        if not starts:
             return []
+        start_id = starts[0]
 
         results = []
         visited = {start_id}
@@ -686,14 +843,13 @@ class LocalGraphClient:
         self, target: str, project: str, max_hops: int = 3
     ) -> tuple[list[dict], str | None]:
         """Return all files reachable from target via CALLS/IMPORTS/INHERITS."""
-        # Try as entity name first
-        entity_id = f"{project}:{target.lower()}"
+        # Try as entity name first (may resolve to several same-named nodes).
+        ent_nodes = self._resolve_query_nodes(target, project) if "/" not in target else []
         target_file = None
 
-        if entity_id in self.graph:
-            node = self.graph.nodes[entity_id]
-            target_file = node.get("file")
-            start_ids = [entity_id]
+        if ent_nodes:
+            target_file = self.graph.nodes[ent_nodes[0]].get("file")
+            start_ids = ent_nodes
         else:
             # Try as file path
             file_node = next((n for n, attr in self.graph.nodes(data=True)

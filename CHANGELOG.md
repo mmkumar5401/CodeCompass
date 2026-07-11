@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.8.0] - 2026-07-11
+
+### Added
+- **`grep` query — regex search over the graph.** The graph-native replacement
+  for grepping source: full regex power over indexed entities
+  (`--grep "^get_"`, `--grep ".*Adapter$"`), matching name/file/kind/description.
+- **Discovery decision guide in the installed `AGENTS.md`** — a
+  discover→trace→read→edit loop with a "which tool when" table. For a feature
+  request that names a concept ("session timeout"), `grep` the concept first
+  (cheap, precise); `map` is the fallback for truly nameless needs.
+
+### Changed
+- **Node-level de-merge.** Graph nodes are now file-qualified (`project:file:name`)
+  with case preserved, so same-named entities stay distinct — `api.request` vs
+  `Session.request`, `Session.send` vs `HTTPAdapter.send`, `class Session` vs a
+  `session` function. Calls resolve to a specific definition at ingest using the
+  captured receiver type (self / constructor / annotation / **return-type
+  inference**), falling back to a name bucket when genuinely ambiguous. See
+  `docs/node-demerge.md`. **Requires a re-ingest.**
+- **`impact` callers now carry `line` and a `resolved` flag.** The real call-site
+  file+line (from the edge, not the merged node) so verification reads a slice,
+  not a whole function; `resolved: false` marks calls whose receiver couldn't be
+  statically typed (surfaced, not dropped, and not claimed as precise).
+- **Return-type inference** (Python + TS): `x = get_thing()` where `get_thing`
+  declares `-> Foo` types `x` as `Foo`, so its method calls resolve.
+
+### Fixed
+- On a Flask/requests-scale benchmark these changes cut the impact task ~80%
+  (de-merged, line-anchored, slice-verified) and flipped the tool from slower to
+  faster than raw grep/read overall.
+
 ## [2.7.0] - 2026-07-11
 
 ### Added

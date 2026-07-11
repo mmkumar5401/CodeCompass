@@ -377,13 +377,38 @@ def _py_type_name(ann: Node | None) -> str | None:
     return None
 
 
+def _py_return_types(root: Node) -> dict[str, str]:
+    """Map function name -> its declared return type (`def f(...) -> Foo:`).
+
+    Enables return-type inference: `x = self.get_adapter(url)` gets typed by
+    `get_adapter`'s `-> BaseAdapter` annotation. Same-named functions with
+    conflicting return types are dropped (can't disambiguate statically)."""
+    rets: dict[str, str] = {}
+    conflict: set[str] = set()
+    for node in _walk(root):
+        if node.type == "function_definition":
+            name = _get_node_name(node, ["identifier"])
+            rt = node.child_by_field_name("return_type")
+            t = _py_type_name(rt) if rt is not None else None
+            if name and t:
+                if name in rets and rets[name] != t:
+                    conflict.add(name)
+                else:
+                    rets[name] = t
+    for name in conflict:
+        rets.pop(name, None)
+    return rets
+
+
 def _py_type_env(root: Node) -> dict[str, str]:
     """Best-effort variable → class map for a Python module.
 
-    Binds from unambiguous local signals: `x = Foo()` instantiations and
-    annotations (`x: Foo`, `def f(x: Foo)`). A name bound to two different types
-    is dropped rather than mis-resolved.
+    Binds from unambiguous local signals: `x = Foo()` instantiations, type
+    annotations (`x: Foo`, `def f(x: Foo)`), and return-type inference
+    (`x = get_thing()` where `get_thing` is declared `-> Foo`). A name bound to
+    two different types is dropped rather than mis-resolved.
     """
+    ret_types = _py_return_types(root)
     types: dict[str, str] = {}
     ambiguous: set[str] = set()
 
@@ -405,6 +430,11 @@ def _py_type_env(root: Node) -> dict[str, str]:
                 bind(name, _py_type_name(ann))
                 if ann is None:
                     bind(name, _py_call_class(right))
+                    # return-type inference: x = fn(...) / x = obj.fn(...)
+                    if right is not None and right.type == "call":
+                        callee = _extract_python_call_parts(right)[0]
+                        if callee:
+                            bind(name, ret_types.get(callee))
         elif node.type in ("typed_parameter", "typed_default_parameter"):
             ident = _child_of_type(node, "identifier")
             ann = node.child_by_field_name("type")
@@ -1126,14 +1156,17 @@ def _type_from_annotation(ann: Node | None) -> str | None:
 def _js_type_env(root: Node) -> dict[str, str]:
     """Best-effort variable → type map for a file.
 
-    Binds from two unambiguous, local signals:
+    Binds from unambiguous, local signals:
       - `var x = new Foo()`            -> x : Foo
       - TS annotations `let x: Foo`,
         `function f(x: Foo)`           -> x : Foo
+      - return-type inference `const x = getThing()` where TS declares
+        `function getThing(): Foo`    -> x : Foo
 
     A name bound to two different types anywhere in the file is dropped as
     ambiguous — better to fall back to name-based handling than to mis-resolve.
     """
+    ret_types = _js_return_types(root)
     types: dict[str, str] = {}
     ambiguous: set[str] = set()
 
@@ -1152,6 +1185,11 @@ def _js_type_env(root: Node) -> dict[str, str]:
             value = node.child_by_field_name("value")
             bind(name, _new_expression_type(value))
             bind(name, _type_from_annotation(_child_of_type(node, "type_annotation")))
+            # return-type inference: const x = fn(...) / const x = obj.fn(...)
+            if value is not None and value.type == "call_expression":
+                callee = _extract_js_call(value)[0]
+                if callee:
+                    bind(name, ret_types.get(callee))
         elif node.type in ("required_parameter", "optional_parameter"):
             pat = node.child_by_field_name("pattern") or _child_of_type(node, "identifier")
             ann = _child_of_type(node, "type_annotation")
@@ -1160,6 +1198,29 @@ def _js_type_env(root: Node) -> dict[str, str]:
     for name in ambiguous:
         types.pop(name, None)
     return types
+
+
+def _js_return_types(root: Node) -> dict[str, str]:
+    """Map function name -> its TS return type (`function f(): Foo` / `f(): Foo`).
+
+    Same-named functions with conflicting return types are dropped."""
+    rets: dict[str, str] = {}
+    conflict: set[str] = set()
+    for node in _walk(root):
+        if node.type in ("function_declaration", "function_expression", "method_definition"):
+            name_node = (_child_of_type(node, "identifier")
+                         or _child_of_type(node, "property_identifier"))
+            rt = node.child_by_field_name("return_type")
+            t = _type_from_annotation(rt) if rt is not None else None
+            if name_node is not None and t:
+                name = _text(name_node)
+                if name in rets and rets[name] != t:
+                    conflict.add(name)
+                else:
+                    rets[name] = t
+    for name in conflict:
+        rets.pop(name, None)
+    return rets
 
 
 def _enclosing_class_name(node: Node) -> str | None:
