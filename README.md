@@ -32,26 +32,8 @@ command, instead of opening a dozen files to follow the thread:
 ![Flow trace of ingest_code](docs/flow-example.svg)
 
 The `json` flow format hands each node its real signature, docstring, and source
-snippet, plus the numbered call order. An agent reads that and narrates the
-flow in plain language — for example, the diagram above becomes:
-
-> **How `ingest_code` works** (narrated by an agent from `--flow ... --format json`)
->
-> 1. **`init_project`** — sets up the `.codecompass/` directory and registers the
->    project's `AGENTS.md` rules before anything is parsed.
-> 2. **`get_client`** — opens the local NetworkX graph that everything will be
->    written into.
-> 3. **`build_hierarchy`** — walks the repo and writes the Project → Folder → File
->    skeleton nodes.
-> 4. **`parse_directory`** — recursively parses every supported file, extracting
->    functions, classes, imports, and call relationships.
-> 5. **`normalize_triples`** — (optional) runs the Haiku pass to canonicalize
->    entity names.
-> 6. **`write_code_triples_batch`** — persists all extracted relationships into the
->    graph, then reports the node count and refreshes `AGENTS.md`.
->
-> Net effect: a repo goes from raw files to a queryable dependency graph in one
-> pass, with the graph saved locally as JSON.
+snippet, plus the numbered call order, so an agent can narrate the whole data
+flow from that single query instead of opening a dozen files.
 
 ---
 
@@ -145,7 +127,9 @@ That's it. Two commands:
 - Writes a `## Code graph` section into the project's `AGENTS.md` with mandatory rules for agents:
   - Run `--blast-radius` before editing any file
   - Run `--impact` before calling unfamiliar symbols
-  - Re-ingest after creating or deleting files
+  - Re-ingest after any code change
+- Installs the Claude Code `PreToolUse` guardrail into `.claude/` (see
+  [Hard enforcement](#hard-enforcement-for-claude-code--pi-optional) below)
 
 Any AI agent that reads `AGENTS.md` (Claude Code, OpenCode, Cursor, etc.) will follow these rules automatically.
 
@@ -159,32 +143,21 @@ actually blocked instead of just discouraged, both Claude Code and
 [pi](https://pi.dev) support hard tool-call enforcement via hooks/extensions.
 
 The block only covers what codecompass unambiguously replaces — searching or
-reading code content (`grep`, `rg`, `cat`, the `Grep` tool). `ls`/`find` are
-left alone; they have legitimate non-code uses (checking build output,
-confirming a generated file exists, listing fixtures) that the graph doesn't
-cover. Guide that judgment call with a decision-rule note in your agent
-instructions rather than blocking it — see the `AGENTS.md` this tool
-generates for the exact wording.
+reading code content (`Grep`/`Glob` tools, `cat`/`grep`/`rg`/`sed`/`awk`/`head`/`tail`/`less`
+inside `Bash`). `ls`/`find` are left alone; they have legitimate non-code uses
+(checking build output, confirming a generated file exists, listing fixtures)
+that the graph doesn't cover.
 
 ### Claude Code
 
-Add a `PreToolUse` hook in `.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "python3 .claude/hooks/block-file-search.py" }] },
-      { "matcher": "Grep", "hooks": [{ "type": "command", "command": "python3 .claude/hooks/block-file-search.py" }] }
-    ]
-  }
-}
-```
-
-`.claude/hooks/block-file-search.py` reads the tool call from stdin, blocks
-`Grep` and `cat`/`grep`/`rg` inside `Bash` (exit code `2`, with the reason
-printed to stderr so Claude sees it and redirects to codecompass), and
-allows everything else.
+`codecompass init` installs this automatically — no manual setup needed. It
+writes `.claude/hooks/block-file-search.py` and merges the required
+`PreToolUse` matchers (`Bash`, `Grep`, `Glob`) into `.claude/settings.json`,
+without clobbering any hooks you've already configured. The hook reads the
+tool call from stdin, blocks matches (exit code `2`, with the reason printed
+to stderr so Claude sees it and redirects to codecompass), and allows
+everything else. Start a new Claude Code session in the repo and accept the
+trust prompt — hooks execute shell commands, so Claude Code asks first.
 
 ### Pi
 
@@ -260,13 +233,19 @@ Every format numbers each call by source line so call order is explicit. By defa
 | Command | Purpose |
 |---|---|
 | `codecompass init [path]` | Create `.codecompass/` and register in `AGENTS.md` |
-| `codecompass ingest-code [path]` | Parse source files and build/rebuild the graph |
+| `codecompass ingest-code [path] [--normalize] [--dump-triples <out.json>] [--describe]` | Parse source files and build/rebuild the graph |
+| `codecompass describe [path] [--batch-size N] [--force] [--apply]` | Stage entity descriptions for an agent swarm to fill in, then merge results back into the graph |
 | `codecompass query <flags> [path]` | Query the graph (blast-radius, impact, deps, flow, tree, etc.) |
 | `codecompass watch [path]` | Live re-index on file changes |
 | `codecompass load-triples <file> <path>` | Load pre-processed triples from JSON |
+| `codecompass mcp [path]` | Run the MCP server, defaulting to the given repo |
 | `codecompass setup` | Copy instructions to `~/.config/opencode/codecompass/` |
 
 All commands default to `.` (current directory) when path is omitted.
+
+`--describe` (on `ingest-code`) and the standalone `describe` command are
+**user-triggered only** — expensive, and not something an agent should run
+automatically after a routine edit or re-ingest.
 
 ---
 
@@ -362,13 +341,15 @@ codecompass/
 │   ├── code_parser.py          tree-sitter entity + relationship extraction
 │   ├── hierarchy_builder.py    Project → Folder → File skeleton
 │   ├── file_watcher.py         incremental re-index on file changes
-│   └── code_normalizer.py      optional entity name normalization (Haiku)
+│   ├── code_normalizer.py      optional entity name normalization (Haiku)
+│   └── description_enricher.py agent-swarm description staging/apply (describe)
 ├── models/
 │   └── code_types.py           CodeTriple, FileNode, FolderNode
 ├── opencode/
 │   └── instructions.md         agent instructions for opencode integration
 ├── config.py                   env var config with fallback defaults
-└── main.py                     CLI dispatch: init / ingest-code / query / watch
+├── main.py                     CLI dispatch: init / ingest-code / describe / query / watch / mcp
+└── mcp_server.py               FastMCP server exposing the same queries as tools
 ```
 
 Inside each indexed project:
