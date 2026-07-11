@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="580" viewBox="0 0 920 580" font-family="ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="cc" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#0ea5a0"/>
+      <stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+    <linearGradient id="grep" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#f43f5e"/>
+      <stop offset="1" stop-color="#fb923c"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#111c33"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#38bdf8"/>
+    </linearGradient>
+    <filter id="sh" x="-40%" y="-10%" width="180%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <rect width="920" height="580" rx="20" fill="url(#bg)"/>
+  <rect x="0" y="0" width="920" height="6" rx="3" fill="url(#accent)"/>
+
+  <!-- Headline -->
+  <text x="44" y="58" font-size="32" font-weight="800" fill="#f1f5f9" letter-spacing="-0.5">
+    <tspan fill="#2dd4bf">66–82% fewer tokens</tspan> than grep + read
+  </text>
+  <text x="44" y="85" font-size="15" fill="#94a3b8">Tokens to a verified answer  ·  lower is better  ·  same tasks &amp; targets</text>
+
+  <!-- Legend -->
+  <rect x="686" y="42" width="15" height="15" rx="4" fill="url(#cc)"/>
+  <text x="707" y="54" font-size="13.5" fill="#cbd5e1">CodeCompass</text>
+  <rect x="686" y="64" width="15" height="15" rx="4" fill="url(#grep)"/>
+  <text x="707" y="76" font-size="13.5" fill="#cbd5e1">grep / read</text>
+
+  <!-- Y gridlines (baseline y=470, scale 0.03641 px/token) -->
+  <g stroke="#1e293b" stroke-width="1">
+    <line x1="88" y1="470" x2="880" y2="470"/>
+    <line x1="88" y1="397" x2="880" y2="397"/>
+    <line x1="88" y1="324" x2="880" y2="324"/>
+    <line x1="88" y1="251" x2="880" y2="251"/>
+    <line x1="88" y1="179" x2="880" y2="179"/>
+  </g>
+  <g font-size="12" fill="#64748b" text-anchor="end">
+    <text x="78" y="474">0</text>
+    <text x="78" y="401">2k</text>
+    <text x="78" y="328">4k</text>
+    <text x="78" y="255">6k</text>
+    <text x="78" y="183">8k</text>
+  </g>
+
+  <!-- ============ groups (bars grow up from y=470) ============ -->
+
+  <!-- g0 requests · center 188 -->
+  <rect x="126" y="423" width="56" height="47" rx="5" fill="url(#cc)" filter="url(#sh)"/>
+  <text x="154" y="415" font-size="13" font-weight="700" fill="#5eead4" text-anchor="middle">1,290</text>
+  <rect x="194" y="329" width="56" height="141" rx="5" fill="url(#grep)" filter="url(#sh)"/>
+  <text x="222" y="321" font-size="13" font-weight="700" fill="#fda4af" text-anchor="middle">3,875</text>
+  <text x="188" y="493" font-size="14.5" font-weight="700" fill="#e2e8f0" text-anchor="middle">psf/requests</text>
+  <rect x="158" y="503" width="60" height="17" rx="8" fill="#1e3a5f"/><text x="188" y="515" font-size="11.5" font-weight="600" fill="#7cc4ff" text-anchor="middle">Python</text>
+  <rect x="161" y="527" width="54" height="24" rx="9" fill="#052e2b" stroke="#134e4a"/><text x="188" y="544" font-size="15" font-weight="800" fill="#2dd4bf" text-anchor="middle">−67%</text>
+
+  <!-- g1 click · center 382 -->
+  <rect x="320" y="409" width="56" height="61" rx="5" fill="url(#cc)" filter="url(#sh)"/>
+  <text x="348" y="401" font-size="13" font-weight="700" fill="#5eead4" text-anchor="middle">1,669</text>
+  <rect x="388" y="130" width="56" height="340" rx="5" fill="url(#grep)" filter="url(#sh)"/>
+  <text x="416" y="122" font-size="13" font-weight="700" fill="#fda4af" text-anchor="middle">9,338</text>
+  <text x="382" y="493" font-size="14.5" font-weight="700" fill="#e2e8f0" text-anchor="middle">pallets/click</text>
+  <rect x="352" y="503" width="60" height="17" rx="8" fill="#1e3a5f"/><text x="382" y="515" font-size="11.5" font-weight="600" fill="#7cc4ff" text-anchor="middle">Python</text>
+  <rect x="355" y="527" width="54" height="24" rx="9" fill="#052e2b" stroke="#134e4a"/><text x="382" y="544" font-size="15" font-weight="800" fill="#2dd4bf" text-anchor="middle">−82%</text>
+
+  <!-- g2 guzzle · center 577 -->
+  <rect x="515" y="408" width="56" height="62" rx="5" fill="url(#cc)" filter="url(#sh)"/>
+  <text x="543" y="400" font-size="13" font-weight="700" fill="#5eead4" text-anchor="middle">1,707</text>
+  <rect x="583" y="288" width="56" height="182" rx="5" fill="url(#grep)" filter="url(#sh)"/>
+  <text x="611" y="280" font-size="13" font-weight="700" fill="#fda4af" text-anchor="middle">4,985</text>
+  <text x="577" y="493" font-size="14.5" font-weight="700" fill="#e2e8f0" text-anchor="middle">guzzlehttp/guzzle</text>
+  <rect x="556" y="503" width="42" height="17" rx="8" fill="#3b1e5f"/><text x="577" y="515" font-size="11.5" font-weight="600" fill="#c4a0ff" text-anchor="middle">PHP</text>
+  <rect x="550" y="527" width="54" height="24" rx="9" fill="#052e2b" stroke="#134e4a"/><text x="577" y="544" font-size="15" font-weight="800" fill="#2dd4bf" text-anchor="middle">−66%</text>
+
+  <!-- g3 express · center 772 -->
+  <rect x="710" y="414" width="56" height="56" rx="5" fill="url(#cc)" filter="url(#sh)"/>
+  <text x="738" y="406" font-size="13" font-weight="700" fill="#5eead4" text-anchor="middle">1,526</text>
+  <rect x="778" y="158" width="56" height="312" rx="5" fill="url(#grep)" filter="url(#sh)"/>
+  <text x="806" y="150" font-size="13" font-weight="700" fill="#fda4af" text-anchor="middle">8,575</text>
+  <text x="772" y="493" font-size="14.5" font-weight="700" fill="#e2e8f0" text-anchor="middle">expressjs/express</text>
+  <rect x="736" y="503" width="72" height="17" rx="8" fill="#5f4a1e"/><text x="772" y="515" font-size="11.5" font-weight="600" fill="#fcd34d" text-anchor="middle">JavaScript</text>
+  <rect x="745" y="527" width="54" height="24" rx="9" fill="#052e2b" stroke="#134e4a"/><text x="772" y="544" font-size="15" font-weight="800" fill="#2dd4bf" text-anchor="middle">−82%</text>
+</svg>

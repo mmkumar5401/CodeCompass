@@ -12,25 +12,7 @@ AI agents read files one at a time and grep to find their way. On a real task th
 
 We benchmarked it against traditional grep/read on six standard tasks (impact, blast radius, dead code, flow trace, find-and-edit, feature scoping) across four real repos, measuring **tokens to a verified answer** — the query output *plus* the code still read to trust it.
 
-```
-Tokens to a verified answer  ·  lower is better  ·  same tasks, same targets
-
-psf/requests · Python
-  codecompass  ██████ 1,290
-  grep / read  █████████████████ 3,875                             −67%
-
-pallets/click · Python
-  codecompass  ███████ 1,669
-  grep / read  ████████████████████████████████████████ 9,338     −82%
-
-guzzlehttp/guzzle · PHP
-  codecompass  ███████ 1,707
-  grep / read  █████████████████████ 4,985                         −66%
-
-expressjs/express · JavaScript
-  codecompass  ███████ 1,526
-  grep / read  █████████████████████████████████████ 8,575         −82%
-```
+![Tokens to a verified answer: CodeCompass vs grep/read across Python, PHP, and JavaScript](docs/benchmark-chart.svg)
 
 CodeCompass wins every relational and discovery task; grep only holds even on a
 plain textual find of a known string. The advantage grows with codebase size and
