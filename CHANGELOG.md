@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.1.0] - 2026-07-11
+
+### Added
+- **Inheritance resolution for `super()` calls** across all call-based languages.
+  `super().method()` (Python), `super.method()` (JS/TS), and `parent::method()`
+  (PHP) now resolve to the parent class's method via a class→parent map, so
+  `impact("Base.method")` captures subclass callers that delegate up. `self::`/
+  `static::` (PHP) resolve to the enclosing class. Recovers callers that were
+  previously left in the unresolved bucket (e.g. click's `Group.invoke` calling
+  `super().invoke()` now shows under `Command.invoke`).
+
 ## [3.0.1] - 2026-07-11
 
 ### Fixed

@@ -206,6 +206,7 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
 
     exported = _collect_python_exports(root)
     type_env = _py_type_env(root)
+    class_parents = _py_class_parents(root)
 
     for node in _walk(root):
         match node.type:
@@ -298,7 +299,7 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                     scope = _enclosing_scope(node)
                     caller = scope or module_name
                     caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
-                    receiver_type = _resolve_py_receiver_type(receiver, obj, node, type_env)
+                    receiver_type = _resolve_py_receiver_type(receiver, obj, node, type_env, class_parents)
                     triples.append(CodeTriple(
                         from_entity=caller,
                         from_type=caller_type,
@@ -447,6 +448,20 @@ def _py_type_env(root: Node) -> dict[str, str]:
     return types
 
 
+def _py_class_parents(root: Node) -> dict[str, str]:
+    """Map class name -> its first base class, for resolving `super()`."""
+    parents: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type == "class_definition":
+            name = _get_node_name(node, ["identifier"])
+            arg = _child_of_type(node, "argument_list")
+            if name and arg:
+                bases = [c for c in arg.children if c.type == "identifier"]
+                if bases:
+                    parents[name] = _text(bases[0])
+    return parents
+
+
 def _enclosing_python_class(node: Node) -> str | None:
     """Name of the nearest enclosing `class C:`, for resolving `self`/`cls`."""
     current = node.parent
@@ -459,13 +474,15 @@ def _enclosing_python_class(node: Node) -> str | None:
     return None
 
 
-def _resolve_py_receiver_type(receiver: str | None, obj: Node | None,
-                              call_node: Node, env: dict[str, str]) -> str | None:
-    """Infer a Python receiver's type from `self`/`cls`, inline `Foo()`, or env."""
+def _resolve_py_receiver_type(receiver: str | None, obj: Node | None, call_node: Node,
+                              env: dict[str, str], parents: dict[str, str] | None = None) -> str | None:
+    """Infer a Python receiver's type from `self`/`cls`, `super()`, inline `Foo()`, or env."""
     if _py_call_class(obj) is not None:
         return _py_call_class(obj)
     if receiver in ("self", "cls"):
         return _enclosing_python_class(call_node)
+    if receiver in ("super()", "super") and parents:
+        return parents.get(_enclosing_python_class(call_node))
     if receiver is not None and receiver in env:
         return env[receiver]
     return None
@@ -726,6 +743,20 @@ def _php_type_env(root: Node) -> dict[str, str]:
     return types
 
 
+def _php_class_parents(root: Node) -> dict[str, str]:
+    """Map class name -> its parent (`extends`), for resolving `parent::`."""
+    parents: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type == "class_declaration":
+            name = _php_name(node)
+            base = _child_of_type(node, "base_clause")
+            if name and base:
+                targets = _php_extends_targets(base)
+                if targets:
+                    parents[name] = _php_basename(targets[0])
+    return parents
+
+
 def _php_call_receiver(node: Node, env: dict[str, str]) -> tuple[str | None, str | None]:
     """Receiver text + inferred type for a member call `$obj->method()`."""
     obj = node.child_by_field_name("object")
@@ -750,6 +781,7 @@ def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
     module_name = _module_name_from_path(file_path)
     triples: list[CodeTriple] = []
     type_env = _php_type_env(root)
+    class_parents = _php_class_parents(root)
 
     def defined_in(name: str, entity_type: str, line: int, is_exported: bool = True,
                    owner: str | None = None) -> None:
@@ -985,7 +1017,19 @@ def _extract_php(root: Node, source: bytes, file_path: str) -> list[CodeTriple]:
             case "scoped_call_expression":
                 names = _children_of_type(node, "name")
                 if names:
-                    calls(_text(names[-1]), TYPE_FUNCTION, _line(node), node)
+                    method = _text(names[-1])
+                    scope_node = node.children[0] if node.children else None
+                    scope_text = _text(scope_node) if scope_node is not None else ""
+                    if scope_text == "parent":
+                        container = _enclosing_php_container(node)
+                        rtype = class_parents.get(container[0]) if container else None
+                    elif scope_text in ("self", "static"):
+                        container = _enclosing_php_container(node)
+                        rtype = container[0] if container else None
+                    else:
+                        rtype = _php_basename(scope_node) if scope_node is not None else None
+                    calls(method, TYPE_FUNCTION, _line(node), node,
+                          receiver=scope_text or None, receiver_type=rtype)
 
             case "object_creation_expression":
                 class_node = None
@@ -1014,6 +1058,7 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
 
     # Best-effort variable → type map for receiver type inference on calls.
     type_env = _js_type_env(root)
+    class_parents = _js_class_parents(root)
 
     def defined(name: str, line: int, owner: str | None = None) -> None:
         triples.append(CodeTriple(
@@ -1089,7 +1134,7 @@ def _extract_javascript(root: Node, source: bytes, file_path: str) -> list[CodeT
                     scope = _enclosing_js_scope(node)
                     caller = scope or module_name
                     caller_type = TYPE_FUNCTION if scope else TYPE_MODULE
-                    receiver_type = _resolve_receiver_type(receiver, obj, node, type_env)
+                    receiver_type = _resolve_receiver_type(receiver, obj, node, type_env, class_parents)
                     triples.append(CodeTriple(
                         from_entity=caller,
                         from_type=caller_type,
@@ -1367,13 +1412,33 @@ def _enclosing_class_name(node: Node) -> str | None:
     return None
 
 
-def _resolve_receiver_type(receiver: str | None, obj: Node | None,
-                           call_node: Node, env: dict[str, str]) -> str | None:
-    """Infer the receiver's type from an inline `new`, `this`, or the type env."""
+def _js_class_parents(root: Node) -> dict[str, str]:
+    """Map class name -> the class it `extends`, for resolving `super`."""
+    parents: dict[str, str] = {}
+    for node in _walk(root):
+        if node.type in ("class_declaration", "class"):
+            name_node = _child_of_type(node, "type_identifier") or _child_of_type(node, "identifier")
+            heritage = _child_of_type(node, "class_heritage")
+            if name_node is not None and heritage is not None:
+                base = None
+                for desc in _walk(heritage):
+                    if desc.type in ("identifier", "type_identifier"):
+                        base = _text(desc)
+                        break
+                if base:
+                    parents[_text(name_node)] = base
+    return parents
+
+
+def _resolve_receiver_type(receiver: str | None, obj: Node | None, call_node: Node,
+                           env: dict[str, str], parents: dict[str, str] | None = None) -> str | None:
+    """Infer the receiver's type from an inline `new`, `this`, `super`, or the type env."""
     if _new_expression_type(obj) is not None:
         return _new_expression_type(obj)
     if receiver in ("this",):
         return _enclosing_class_name(call_node)
+    if receiver == "super" and parents:
+        return parents.get(_enclosing_class_name(call_node))
     if receiver is not None and receiver in env:
         return env[receiver]
     return None

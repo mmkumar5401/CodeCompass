@@ -339,6 +339,21 @@ def test_python_public_method_marked_exported():
     assert by_name.get("_private") is False, "underscore method is not exported"
 
 
+def test_inheritance_super_resolution_all_langs():
+    cases = [
+        (".py", "class Command:\n    def invoke(self, c): pass\n"
+                "class Group(Command):\n    def invoke(self, c):\n        return super().invoke(c)\n"),
+        (".js", "class Command { invoke(c){} }\n"
+                "class Group extends Command { invoke(c){ return super.invoke(c); } }\n"),
+        (".php", "<?php\nclass Command { function invoke($c){} }\n"
+                 "class Group extends Command { function invoke($c){ return parent::invoke($c); } }\n"),
+    ]
+    for suffix, src in cases:
+        triples = _parse(src, suffix=suffix)
+        call = next(t for t in triples if t.relation_type == "CALLS" and t.to_entity == "invoke")
+        assert call.call_receiver_type == "Command", f"{suffix}: super()/parent:: should type as the parent class"
+
+
 def test_php_receiver_type_and_exports():
     src = (
         "<?php\n"
