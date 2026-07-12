@@ -3,7 +3,7 @@
     python -m graph.code_query_cli --impact "login()" <repo_path>
     python -m graph.code_query_cli --deps src/auth/login.py <repo_path>
     python -m graph.code_query_cli --styles LoginForm <repo_path>
-    python -m graph.code_query_cli --trace "main()" <repo_path>
+    python -m graph.code_query_cli --flow "main()" <repo_path>
     python -m graph.code_query_cli --tree <repo_path>
 
 Output is plain text by default (agent-friendly). Pass --rich for formatted tables.
@@ -12,16 +12,12 @@ Output is plain text by default (agent-friendly). Pass --rich for formatted tabl
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
-from pathlib import Path
-
-_project_root = Path(__file__).resolve().parent.parent
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
 
 from rich.console import Console
 from rich.table import Table
@@ -42,88 +38,64 @@ STALE_WARN_HOURS = 24
 
 def fetch_impact(entity_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
     """Return callers of entity_name as structured data."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         rows = client.find_callers(entity_name, project, max_hops)
         updated_at = _entity_updated_at(client, entity_name)
-    finally:
-        client.close()
     return {"entity": entity_name, "callers": rows, "updated_at": updated_at}
 
 
 def fetch_grep(pattern: str, repo_path: str, project: str, field: str = "all",
                ignore_case: bool = True, limit: int = 100) -> dict:
     """Regex-search the graph — 'grep' over indexed entities, not file lines."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         return client.grep_graph(pattern, project, field=field,
                                  ignore_case=ignore_case, limit=limit)
-    finally:
-        client.close()
 
 
 def fetch_search(query: str, repo_path: str, project: str, limit: int = 30,
                  kind: str | None = None) -> dict:
     """Search the graph for entities matching a keyword — the discovery entry point."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         rows = client.search_entities(query, project, limit=limit, kind=kind)
-    finally:
-        client.close()
     return {"query": query, "matches": rows, "count": len(rows)}
 
 
 def fetch_map(repo_path: str, project: str, include_tests: bool = False) -> dict:
     """Compact `{file: [symbols]}` index for an agent to reason over during discovery."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         m = client.symbol_map(project, include_tests=include_tests)
-    finally:
-        client.close()
     return {"project": project, "files": m, "file_count": len(m)}
 
 
 def fetch_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
     """Return what file_path imports as structured data."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         rows = client.find_dependencies(file_path, project, max_hops)
         updated_at = client.get_file_updated_at(file_path, project)
-    finally:
-        client.close()
     return {"file": file_path, "dependencies": rows, "updated_at": updated_at}
 
 
 def fetch_styles(element_name: str, repo_path: str, project: str) -> dict:
     """Return CSS selectors that style element_name as structured data."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         rows = client.find_styles(element_name, project)
         updated_at = _entity_updated_at(client, element_name)
-    finally:
-        client.close()
     return {"element": element_name, "selectors": rows, "updated_at": updated_at}
 
 
 def fetch_trace(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
     """Return forward call chain from start_name as structured data."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         rows = client.trace_calls(start_name, project, max_hops)
         updated_at = _entity_updated_at(client, start_name)
-    finally:
-        client.close()
     return {"entity": start_name, "calls": rows, "updated_at": updated_at}
 
 
 def fetch_blast_radius(target: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
     """Return blast radius of target as structured data."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         rows, target_file = client.get_blast_radius(target, project, max_hops)
         updated_at = client.get_file_updated_at(target_file, project) if target_file else None
-    finally:
-        client.close()
 
     if target_file is None:
         return {"target": target, "found": False, "files": [], "updated_at": None}
@@ -153,9 +125,7 @@ def fetch_batch_impact(targets: list[str], repo_path: str, project: str, max_hop
     for t in targets:
         flat_targets.extend(s.strip() for s in t.split(",") if s.strip())
 
-    input_set = set(flat_targets)
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         merged: dict[str, dict] = {}
         resolved: list[str] = []
         staleness_ts: str | None = None
@@ -181,8 +151,6 @@ def fetch_batch_impact(targets: list[str], repo_path: str, project: str, max_hop
                     if h < merged[f]["hops"]:
                         merged[f]["hops"] = h
                     merged[f]["via"].add(target)
-    finally:
-        client.close()
 
     deduped = sorted(
         [{"file": f, "hops": v["hops"], "via": sorted(v["via"])} for f, v in merged.items()],
@@ -199,11 +167,8 @@ def fetch_batch_impact(targets: list[str], repo_path: str, project: str, max_hop
 
 def fetch_dead_code(repo_path: str, project: str, show_entrypoints: bool = False) -> dict:
     """Return dead-code candidates as structured data."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         result = client.find_dead_code(project)
-    finally:
-        client.close()
     return {
         "project": project,
         "dead": result["dead"],
@@ -214,12 +179,9 @@ def fetch_dead_code(repo_path: str, project: str, show_entrypoints: bool = False
 
 def fetch_tree(repo_path: str, project: str) -> dict:
     """Return project hierarchy as structured data."""
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         rows = client.get_project_tree(project)
         last_ingested = client.get_project_last_ingested(project)
-    finally:
-        client.close()
     return {"project": project, "tree": rows, "last_ingested": last_ingested}
 
 
@@ -231,11 +193,8 @@ def fetch_flow(start_name: str, repo_path: str, project: str, max_hops: int = DE
     line — NO embedded source, docstrings, narration, or rendered image. Use
     fetch_flow_summary for a human-facing walkthrough (mermaid + narration).
     """
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         data = client.trace_flow(start_name, project, max_hops, include_external=include_external)
-    finally:
-        client.close()
 
     nodes = data["nodes"]
     edges = data["edges"]
@@ -272,11 +231,8 @@ def fetch_flow_summary(start_name: str, repo_path: str, project: str, max_hops: 
     "drawio" renders a diagram. Heavier than fetch_flow — use when a person needs
     to read the flow, not when an agent just needs the structure.
     """
-    client = get_client(repo_path)
-    try:
+    with closing(get_client(repo_path)) as client:
         data = client.trace_flow(start_name, project, max_hops, include_external=include_external)
-    finally:
-        client.close()
 
     nodes = data["nodes"]
     edges = data["edges"]
@@ -327,8 +283,6 @@ def main() -> None:
         run_deps(args.deps, repo_path, project, max_hops=args.hops, rich=rich)
     elif args.styles:
         run_styles(args.styles, repo_path, project, rich=rich)
-    elif args.trace:
-        run_trace(args.trace, repo_path, project, max_hops=args.hops, rich=rich)
     elif args.flow:
         run_flow(args.flow, repo_path, project, max_hops=args.hops, rich=rich,
                  output=args.flow_output, include_external=args.include_external,
@@ -435,33 +389,6 @@ def run_styles(element_name: str, repo_path: str, project: str, rich: bool = Fal
         print(f"CSS selectors for '{element_name}':")
         for row in rows:
             print(f"  {row.get('selector','')} in {row.get('source_file','')} line {row.get('line','')}")
-
-
-def run_trace(start_name: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
-    """Trace the call chain forward from start_name."""
-    data = fetch_trace(start_name, repo_path, project, max_hops)
-    rows = data["calls"]
-    updated_at = data["updated_at"]
-
-    if not rows:
-        print(f"'{start_name}' makes no tracked calls within {max_hops} hops.")
-        return
-
-    stamp = _staleness_line(updated_at, rich_mode=rich)
-    if rich:
-        console.print(f"\n[bold blue]Call trace from:[/] {start_name}")
-        if stamp:
-            console.print(stamp)
-        table = _make_table(title=f"Call chain from '{start_name}'", columns=["Callee", "Type", "File", "Depth"])
-        for row in rows:
-            table.add_row(row.get("callee_name",""), row.get("callee_type",""), row.get("callee_file",""), str(row.get("depth","")))
-        console.print(table)
-    else:
-        if stamp:
-            print(stamp)
-        print(f"Call chain from '{start_name}':")
-        for row in rows:
-            print(f"  {row.get('callee_name','')} ({row.get('callee_type','')}) in {row.get('callee_file','')} [depth {row.get('depth','')}]")
 
 
 def run_blast_radius(target: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
@@ -1018,7 +945,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--impact", metavar="ENTITY")
     parser.add_argument("--deps", metavar="FILE")
     parser.add_argument("--styles", metavar="ELEMENT")
-    parser.add_argument("--trace", metavar="ENTITY")
     parser.add_argument("--flow", metavar="ENTITY")
     parser.add_argument("--flow-summary", metavar="ENTITY",
                         help="Flow trace + rendered narration (mermaid by default) for a human")

@@ -31,17 +31,21 @@ cp AGENTS.md pi-package/templates/AGENTS.md
 
 ## Install the package
 
-Global install (applies to all your pi sessions):
+Published to npm as `codecompass-pi`:
 
 ```bash
-pi install git:github.com/<user>/codecompass
+pi install npm:codecompass-pi
 ```
 
-Local install (only current project):
+Local install during development:
 
 ```bash
-pi install -l git:github.com/<user>/codecompass
+pi install /absolute/path/to/pi-package
 ```
+
+### Publishing
+
+The package is published automatically via GitHub Actions when a `v*.*.*` tag is pushed, but only if the `NPM_TOKEN` repository secret is configured. Add the secret first — otherwise the publish job will fail.
 
 ## Initialize a project
 

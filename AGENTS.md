@@ -36,6 +36,11 @@ All commands default to the current directory — run them from the project root
 3. **Read** the specific slice the graph pointed you to (Read tool / `sed -n`),
    not the whole file.
 
+   Use the Read tool with `offset` and `limit`, or shell snippets like
+   `sed -n 'START,ENDp'`, `head`, and `tail`, to pull only the function or
+   slice the graph identified. For edits, use the edit tool with exact matched
+   text; rewrite the smallest slice that works, not the whole file.
+
 4. **Edit** — before editing, verify the target fully so you don't break callers or dependents:
    - Run `--deps <file>` to understand what the file relies on.
    - Run `--flow <entry_symbol> --format json` (or `--flow-summary <entry_symbol>`) to trace the logic end-to-end.

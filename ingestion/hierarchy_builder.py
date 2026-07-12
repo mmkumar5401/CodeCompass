@@ -74,34 +74,6 @@ def build_hierarchy(project_root: str, project_name: str, client) -> dict[str, s
     return file_id_map
 
 
-def collect_file_nodes(project_root: str) -> list[FileNode]:
-    """Return FileNode objects for every supported source file under project_root.
-
-    Useful for dry-run inspection or passing file lists to other pipeline stages.
-    """
-    nodes: list[FileNode] = []
-    for dirpath, dirnames, filenames in os.walk(project_root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        for filename in filenames:
-            ext = Path(filename).suffix.lower()
-            if ext in _SOURCE_EXTENSIONS:
-                full_path = os.path.join(dirpath, filename)
-                rel_path = os.path.relpath(full_path, project_root)
-                nodes.append(_make_file_node(rel_path, project_root))
-    return nodes
-
-
-def collect_folder_nodes(project_root: str) -> list[FolderNode]:
-    """Return FolderNode objects for every non-skipped directory under project_root."""
-    nodes: list[FolderNode] = []
-    for dirpath, dirnames, _ in os.walk(project_root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        rel_dir = os.path.relpath(dirpath, project_root)
-        if rel_dir != ".":
-            nodes.append(_make_folder_node(rel_dir, project_root))
-    return nodes
-
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

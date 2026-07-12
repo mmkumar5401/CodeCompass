@@ -97,6 +97,13 @@ def _active_repo() -> str:
     return _REPO_PATH
 
 
+def _tool(fetch_fn, *args, **kwargs):
+    """Resolve the active repo, ensure it is initialized, and call a fetch helper."""
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    return fetch_fn(*args, repo, os.path.basename(repo), **kwargs)
+
+
 @mcp.tool()
 def blast_radius(target: str, hops: int = DEFAULT_HOPS) -> dict:
     """Return every file that DEPENDS ON the target — its dependents, traversed in
@@ -106,9 +113,7 @@ def blast_radius(target: str, hops: int = DEFAULT_HOPS) -> dict:
     entry point with no dependents (nothing imports it) returns few/none — that's
     correct, not empty. This is the opposite direction from `deps`.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_blast_radius(target, repo, os.path.basename(repo), max_hops=hops)
+    return _tool(fetch_blast_radius, target, max_hops=hops)
 
 
 @mcp.tool()
@@ -118,9 +123,7 @@ def batch_impact(targets: list[str], hops: int = DEFAULT_HOPS) -> dict:
     Useful for multi-file PRs: pass the changed files and get the combined
     set of files that may be impacted.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_batch_impact(targets, repo, os.path.basename(repo), max_hops=hops)
+    return _tool(fetch_batch_impact, targets, max_hops=hops)
 
 
 @mcp.tool()
@@ -129,33 +132,25 @@ def impact(symbol: str, hops: int = DEFAULT_HOPS) -> dict:
 
     Use this before renaming or removing something.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_impact(symbol, repo, os.path.basename(repo), max_hops=hops)
+    return _tool(fetch_impact, symbol, max_hops=hops)
 
 
 @mcp.tool()
 def deps(file_path: str, hops: int = DEFAULT_HOPS) -> dict:
     """Show what a file imports or depends on, directly and transitively."""
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_deps(file_path, repo, os.path.basename(repo), max_hops=hops)
+    return _tool(fetch_deps, file_path, max_hops=hops)
 
 
 @mcp.tool()
 def trace(symbol: str, hops: int = DEFAULT_HOPS) -> dict:
     """Trace the call chain forward from a function or symbol."""
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_trace(symbol, repo, os.path.basename(repo), max_hops=hops)
+    return _tool(fetch_trace, symbol, max_hops=hops)
 
 
 @mcp.tool()
 def styles(element: str) -> dict:
     """Find every CSS selector that styles an HTML element or class name."""
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_styles(element, repo, os.path.basename(repo))
+    return _tool(fetch_styles, element)
 
 
 @mcp.tool()
@@ -169,10 +164,7 @@ def grep(pattern: str, field: str = "all", ignore_case: bool = True, limit: int 
     pattern (`^test_`, `.*Adapter$`, `handle|dispatch`), then drill in with
     impact/flow/deps.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_grep(pattern, repo, os.path.basename(repo), field=field,
-                      ignore_case=ignore_case, limit=limit)
+    return _tool(fetch_grep, pattern, field=field, ignore_case=ignore_case, limit=limit)
 
 
 @mcp.tool()
@@ -187,9 +179,7 @@ def map(include_tests: bool = False) -> dict:
     about where to hook in — then drill in with flow/impact/deps. Prefer this
     over keyword `search` when intent is semantic, not a literal string.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_map(repo, os.path.basename(repo), include_tests=include_tests)
+    return _tool(fetch_map, include_tests=include_tests)
 
 
 @mcp.tool()
@@ -203,9 +193,7 @@ def search(query: str, limit: int = 30, kind: str = "") -> dict:
     relevant symbols, then drill in with impact/flow/deps. Optional `kind` filters
     by entity type (e.g. "function", "class").
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_search(query, repo, os.path.basename(repo), limit=limit, kind=kind or None)
+    return _tool(fetch_search, query, limit=limit, kind=kind or None)
 
 
 @mcp.tool()
@@ -220,15 +208,7 @@ def flow(
     depth and each edge's from/to/type/order/line. No embedded source or image.
     Use flow_summary when a person needs a readable walkthrough.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_flow(
-        entry_symbol,
-        repo,
-        os.path.basename(repo),
-        max_hops=hops,
-        include_external=include_external,
-    )
+    return _tool(fetch_flow, entry_symbol, max_hops=hops, include_external=include_external)
 
 
 @mcp.tool()
@@ -245,19 +225,10 @@ def flow_summary(
     "drawio" renders a diagram. Heavier than `flow` — use for reading, not for
     an agent that just needs the call structure.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
     fmt = format.lower()
     if fmt not in {"drawio", "mermaid", "json"}:
         raise ValueError(f"format must be 'drawio', 'mermaid', or 'json', got '{format}'")
-    return fetch_flow_summary(
-        entry_symbol,
-        repo,
-        os.path.basename(repo),
-        max_hops=hops,
-        fmt=fmt,
-        include_external=include_external,
-    )
+    return _tool(fetch_flow_summary, entry_symbol, max_hops=hops, fmt=fmt, include_external=include_external)
 
 
 @mcp.tool()
@@ -267,17 +238,13 @@ def dead_code(include_entrypoints: bool = False) -> dict:
     Set include_entrypoints=True to also list likely runtime entry points.
     Always verify candidates manually before deleting.
     """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_dead_code(repo, os.path.basename(repo), show_entrypoints=include_entrypoints)
+    return _tool(fetch_dead_code, show_entrypoints=include_entrypoints)
 
 
 @mcp.tool()
 def tree() -> dict:
     """Return the full project hierarchy as a tree."""
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    return fetch_tree(repo, os.path.basename(repo))
+    return _tool(fetch_tree)
 
 
 @mcp.tool()

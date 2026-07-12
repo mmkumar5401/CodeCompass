@@ -16,8 +16,6 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Optional
-
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from watchdog.observers import Observer
 

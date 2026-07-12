@@ -57,7 +57,7 @@ def test_output_is_one_file_per_line(capsys):
         {"file": "x/b.py", "edge_type": "CALLS", "hops": 1},
     ]
     out = _run("func", rows, "src/entry.py", capsys)
-    lines = [l for l in out.strip().splitlines() if not l.startswith("#")]
+    lines = [line for line in out.strip().splitlines() if not line.startswith("#")]
     for line in lines:
         assert " " not in line.strip(), f"Expected bare path, got: {line!r}"
 
@@ -72,7 +72,7 @@ def test_duplicate_rows_deduped_to_minimum_hop(capsys):
         {"file": "shared.py", "edge_type": "IMPORTS", "hops": 1},
     ]
     out = _run("func", rows, "src/main.py", capsys)
-    file_lines = [l for l in out.splitlines() if "shared.py" in l]
+    file_lines = [line for line in out.splitlines() if "shared.py" in line]
     assert len(file_lines) == 1
 
 

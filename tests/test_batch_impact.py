@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sys
 import os
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -75,7 +75,7 @@ def test_overlapping_dependents_via_lists_both_targets(capsys):
     }
     out = _run(["a.py", "b.py"], blast, capsys)
     # The via annotation for shared.py should name both sources
-    shared_line = next(l for l in out.splitlines() if "shared.py" in l)
+    shared_line = next(line for line in out.splitlines() if "shared.py" in line)
     assert "a.py" in shared_line and "b.py" in shared_line
 
 
@@ -147,7 +147,7 @@ def test_also_in_input_flag(capsys):
         "b.py": ([], "b.py"),
     }
     out = _run(["a.py", "b.py"], blast, capsys)
-    b_line = next(l for l in out.splitlines() if "b.py" in l and "[via:" in l)
+    b_line = next(line for line in out.splitlines() if "b.py" in line and "[via:" in line)
     assert "[also in input]" in b_line
 
 
@@ -156,7 +156,7 @@ def test_no_also_in_input_for_unrelated_deps(capsys):
         "a.py": ([{"file": "dep.py", "edge_type": "CALLS", "hops": 1}], "a.py"),
     }
     out = _run(["a.py"], blast, capsys)
-    dep_line = next(l for l in out.splitlines() if "dep.py" in l)
+    dep_line = next(line for line in out.splitlines() if "dep.py" in line)
     assert "[also in input]" not in dep_line
 
 

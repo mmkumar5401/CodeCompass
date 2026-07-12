@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
+from rich.progress import track
 from tree_sitter import Language, Parser, Node
 
 from models.code_types import CodeTriple
@@ -314,11 +315,6 @@ def _extract_python(root: Node, source: bytes, file_path: str) -> list[CodeTripl
                     ))
 
     return triples
-
-
-def _extract_python_callee(call_node: Node) -> str | None:
-    """Back-compat shim: callee name only."""
-    return _extract_python_call_parts(call_node)[0]
 
 
 def _extract_python_call_parts(call_node: Node) -> tuple[str | None, str | None, Node | None]:
@@ -1444,11 +1440,6 @@ def _resolve_receiver_type(receiver: str | None, obj: Node | None, call_node: No
     return None
 
 
-def _extract_js_callee(call_node: Node) -> str | None:
-    """Back-compat shim: callee name only."""
-    return _extract_js_call(call_node)[0]
-
-
 def _extract_js_require_target(call_node: Node) -> str | None:
     """Module string of a `require('x')` or dynamic `import('x')` call, else None.
 
@@ -1785,14 +1776,7 @@ def parse_directory(
             if Path(filename).suffix.lower() in SUPPORTED_EXTENSIONS:
                 source_files.append(os.path.join(dirpath, filename))
 
-    if progress:
-        try:
-            from tqdm import tqdm
-            source_files_iter = tqdm(source_files, desc="Parsing files", unit="file")
-        except ImportError:
-            source_files_iter = source_files
-    else:
-        source_files_iter = source_files
+    source_files_iter = track(source_files, description="Parsing files") if progress else source_files
 
     triples: list[CodeTriple] = []
     for full_path in source_files_iter:

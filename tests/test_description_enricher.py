@@ -73,7 +73,7 @@ def test_apply_describe_results_updates_nodes_and_cleans_up(tmp_path):
     entity_id = f"{project}:greet"
     _seed_entity(repo_path, project, entity_id)
 
-    staged = prepare_describe_batches(str(repo_path), batch_size=15)
+    _ = prepare_describe_batches(str(repo_path), batch_size=15)
     describe_dir = repo_path / ".codecompass" / "describe"
     result_path = describe_dir / "batch_0000.result.json"
     result_path.write_text(json.dumps({entity_id: "Greets a user by name."}))

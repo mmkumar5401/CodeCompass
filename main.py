@@ -7,6 +7,7 @@ Commands:
     watch <repo_path>
 """
 
+import argparse
 import sys
 import os
 import re
@@ -363,6 +364,11 @@ All commands default to the current directory — run them from the project root
 3. **Read** the specific slice the graph pointed you to (Read tool / `sed -n`),
    not the whole file.
 
+   Use the Read tool with `offset` and `limit`, or shell snippets like
+   `sed -n 'START,ENDp'`, `head`, and `tail`, to pull only the function or
+   slice the graph identified. For edits, use the edit tool with exact matched
+   text; rewrite the smallest slice that works, not the whole file.
+
 4. **Edit** — before editing, verify the target fully so you don't break callers or dependents:
    - Run `--deps <file>` to understand what the file relies on.
    - Run `--flow <entry_symbol> --format json` (or `--flow-summary <entry_symbol>`) to trace the logic end-to-end.
@@ -528,65 +534,69 @@ def watch_code(repo_path: str) -> None:
 
 def main():
     prog = "codecompass"
-    usage = (
-        f"[bold]Usage:[/]\n"
-        f"  {prog} init [italic]<repo_path>[/]\n"
-        f"  {prog} ingest-code [italic]<repo_path>[/] [--normalize] [--dump-triples [italic]<out.json>[/]] [--describe]\n"
-        f"  {prog} describe [italic]<repo_path>[/] [--batch-size N] [--force] [--apply]\n"
-        f"  {prog} query [italic]<--flag> <arg> <repo_path>[/]\n"
-        f"  {prog} load-triples [italic]<triples.json> <repo_path>[/]\n"
-        f"  {prog} watch [italic]<repo_path>[/]\n"
-        f"  {prog} mcp [italic]<repo_path>[/]"
+    parser = argparse.ArgumentParser(
+        prog=prog,
+        description="CodeCompass — code dependency index for LLM coding agents.",
     )
+    subparsers = parser.add_subparsers(dest="command")
 
-    if len(sys.argv) < 2:
-        console.print(usage)
+    p_init = subparsers.add_parser("init", help="Initialize .codecompass/ in a repo")
+    p_init.add_argument("repo_path", nargs="?", default=".")
+
+    p_ingest = subparsers.add_parser("ingest-code", help="Index a repo into the local graph")
+    p_ingest.add_argument("repo_path", nargs="?", default=".")
+    p_ingest.add_argument("--normalize", action="store_true")
+    p_ingest.add_argument("--dump-triples", metavar="OUT")
+    p_ingest.add_argument("--describe", action="store_true")
+
+    p_describe = subparsers.add_parser("describe", help="Stage or apply entity descriptions")
+    p_describe.add_argument("repo_path", nargs="?", default=".")
+    p_describe.add_argument("--batch-size", type=int, default=15)
+    p_describe.add_argument("--force", action="store_true")
+    p_describe.add_argument("--apply", action="store_true")
+
+    p_load = subparsers.add_parser("load-triples", help="Load pre-normalized triples into the graph")
+    p_load.add_argument("triples_file")
+    p_load.add_argument("repo_path")
+
+    p_watch = subparsers.add_parser("watch", help="Watch a repo and keep the graph updated")
+    p_watch.add_argument("repo_path", nargs="?", default=".")
+
+    p_mcp = subparsers.add_parser("mcp", help="Run the MCP server")
+    p_mcp.add_argument("repo_path", nargs="?", default=".")
+
+    subparsers.add_parser("query", help="Run a graph query (passes through to code_query_cli)")
+
+    args, unknown = parser.parse_known_args()
+
+    if args.command is None:
+        parser.print_help()
         sys.exit(1)
 
-    command = sys.argv[1]
+    if unknown and args.command != "query":
+        parser.error(f"unrecognized arguments: {' '.join(unknown)}")
 
-    if command == "init":
-        args = sys.argv[2:]
-        init_project(args[0] if args else ".")
+    if args.command == "init":
+        init_project(args.repo_path)
 
-    elif command == "ingest-code":
-        args = sys.argv[2:]
-        non_flag_args = [a for a in args if not a.startswith("--")]
-        repo_path = non_flag_args[0] if non_flag_args else "."
-        normalize = "--normalize" in args
-        describe = "--describe" in args
-        dump_triples = None
-        if "--dump-triples" in args:
-            idx = args.index("--dump-triples")
-            if idx + 1 < len(args):
-                dump_triples = args[idx + 1]
-        ingest_code(repo_path, normalize=normalize, dump_triples=dump_triples, describe=describe)
+    elif args.command == "ingest-code":
+        ingest_code(
+            args.repo_path,
+            normalize=args.normalize,
+            dump_triples=args.dump_triples,
+            describe=args.describe,
+        )
 
-    elif command == "describe":
-        args = sys.argv[2:]
-        repo_path = "."
-        batch_size = 15
-        apply = "--apply" in args
-        force = "--force" in args
-        i = 0
-        while i < len(args):
-            a = args[i]
-            if a == "--batch-size" and i + 1 < len(args):
-                batch_size = int(args[i + 1])
-                i += 2
-            elif a in ("--apply", "--force"):
-                i += 1
-            else:
-                repo_path = a
-                i += 1
-
-        if apply:
+    elif args.command == "describe":
+        if args.apply:
             from ingestion.description_enricher import apply_describe_results
-            updated = apply_describe_results(repo_path)
+            updated = apply_describe_results(args.repo_path)
             console.print(f"[bold green]Applied[/] descriptions for {updated} entities.")
         else:
             from ingestion.description_enricher import prepare_describe_batches
-            staged = prepare_describe_batches(repo_path, batch_size=batch_size, force=force)
+            staged = prepare_describe_batches(
+                args.repo_path, batch_size=args.batch_size, force=args.force
+            )
             if staged["num_entities"] == 0:
                 console.print("[dim]Nothing to describe.[/]")
             else:
@@ -594,40 +604,25 @@ def main():
                     f"[bold green]Staged[/] {staged['num_entities']} entities in "
                     f"{staged['num_batches']} batch(es) at {staged['describe_dir']}.\n"
                     f"Read {staged['instructions_path']} and dispatch a sub-agent per "
-                    f"batch, then run `codecompass describe {repo_path} --apply`."
+                    f"batch, then run `codecompass describe {args.repo_path} --apply`."
                 )
 
-    elif command == "load-triples":
-        args = sys.argv[2:]
-        if len(args) < 2:
-            console.print(f"[red]Usage: {prog} load-triples <triples.json> <repo_path>[/]")
-            sys.exit(1)
-        load_triples(args[0], args[1])
+    elif args.command == "load-triples":
+        load_triples(args.triples_file, args.repo_path)
 
-    elif command == "query":
+    elif args.command == "query":
         from graph.code_query_cli import main as query_main
-        sys.argv = [f"{prog} query"] + sys.argv[2:]
+        sys.argv = [f"{prog} query"] + unknown
         query_main()
 
-    elif command == "setup":
-        from graph.setup import run_setup
-        run_setup()
+    elif args.command == "watch":
+        watch_code(args.repo_path)
 
-    elif command == "watch":
-        args = sys.argv[2:]
-        watch_code(args[0] if args else ".")
-
-    elif command == "mcp":
-        args = sys.argv[2:]
-        if args:
-            os.environ["CODECOMPASS_REPO"] = os.path.abspath(args[0])
+    elif args.command == "mcp":
+        if args.repo_path != ".":
+            os.environ["CODECOMPASS_REPO"] = os.path.abspath(args.repo_path)
         from mcp_server import main as mcp_main
         mcp_main()
-
-    else:
-        console.print(f"[red]Unknown command:[/] {command}\n")
-        console.print(usage)
-        sys.exit(1)
 
 
 if __name__ == "__main__":

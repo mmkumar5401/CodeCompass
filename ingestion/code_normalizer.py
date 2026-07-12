@@ -17,6 +17,7 @@ import json
 from typing import Any
 
 import anthropic
+from rich.progress import track
 
 from config import anthropic_api_key
 from models.code_types import CodeTriple
@@ -67,14 +68,7 @@ def normalize_triples(triples: list[CodeTriple], progress: bool = False) -> list
     batches = _split_into_batches(triples, BATCH_SIZE)
     normalized: list[CodeTriple] = []
 
-    if progress:
-        try:
-            from tqdm import tqdm
-            batches_iter = tqdm(batches, desc="Normalizing batches", unit="batch")
-        except ImportError:
-            batches_iter = batches
-    else:
-        batches_iter = batches
+    batches_iter = track(batches, description="Normalizing batches") if progress else batches
 
     for batch in batches_iter:
         corrected = _normalize_batch(client, batch)

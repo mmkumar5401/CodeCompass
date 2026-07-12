@@ -1,0 +1,54 @@
+name: Publish Pi package to npm
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  check-version:
+    name: Check if pi package version is unpublished
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.check.outputs.should_publish }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare local version to latest on npm
+        id: check
+        working-directory: pi-package
+        run: |
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED_VERSION=$(npm view codecompass-pi version 2>/dev/null || echo "")
+          echo "local=$LOCAL_VERSION published=$PUBLISHED_VERSION"
+          echo "version=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
+          if [ -n "$LOCAL_VERSION" ] && [ "$LOCAL_VERSION" != "$PUBLISHED_VERSION" ]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  npm-publish:
+    name: Publish to npm
+    needs: check-version
+    if: needs.check-version.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish pi package
+        working-directory: pi-package
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

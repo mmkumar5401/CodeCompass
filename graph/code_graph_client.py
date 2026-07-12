@@ -10,7 +10,7 @@ import os
 import re
 import networkx as nx
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Optional
 
 from models.code_types import CodeTriple, FileNode, FolderNode
 
