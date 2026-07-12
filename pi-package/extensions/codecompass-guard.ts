@@ -18,10 +18,7 @@ const TEMPLATE_DIR = join(__dirname, "..", "templates");
 const _BLOCKED_SHELL_RE = /(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)/;
 
 const _REASON =
-  "Don't use {what}. Discover through the graph — `codecompass query --map` " +
-  "(compact index to reason over) or `--search <kw>`, then `--flow`/`--impact`/" +
-  "`--deps` to trace — then read the specific slice you need with the Read tool " +
-  "(or `sed -n`/`head`/`tail`), not a whole-file dump.";
+  "Don't use {what}. Discover through the graph — `codecompass query --map` (compact index to reason over) or `--search <kw>`, then `--flow`/`--impact`/`--deps` to trace — then read the specific slice you need with the Read tool (or `sed -n`/`head`/`tail`), not a whole-file dump.";
 
 function commandExists(name: string): boolean {
   try {
