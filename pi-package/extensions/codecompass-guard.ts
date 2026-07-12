@@ -15,7 +15,6 @@ const TEMPLATE_DIR = join(__dirname, "..", "templates");
 
 // Search tools/commands and whole-file dumps — blocked. Use the graph to
 // discover, then read targeted slices.
-const _BLOCKED_TOOLS = new Set(["grep"]);
 const _BLOCKED_SHELL_RE = /(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)/;
 
 const _REASON =
@@ -53,13 +52,7 @@ function detectPackageSource(): string {
 }
 
 function loadSystemPrompt(): string {
-  const path = join(TEMPLATE_DIR, "APPEND_SYSTEM.md");
-  if (!existsSync(path)) {
-    // Fallback: the package was published without templates. This should not
-    // happen because package.json files[] includes templates/.
-    return "## Code graph\n\nUse codecompass for navigation.";
-  }
-  return readFileSync(path, "utf8");
+  return readFileSync(join(TEMPLATE_DIR, "APPEND_SYSTEM.md"), "utf8");
 }
 
 export default function (pi: ExtensionAPI) {
@@ -77,8 +70,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event) => {
     const toolName = event.toolName;
 
-    if (_BLOCKED_TOOLS.has(toolName)) {
-      return { block: true, reason: _REASON.replace("{what}", `the ${toolName} tool`) };
+    if (toolName === "grep") {
+      return { block: true, reason: _REASON.replace("{what}", "the grep tool") };
     }
 
     if (toolName === "bash") {
