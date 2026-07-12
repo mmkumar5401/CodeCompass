@@ -2,6 +2,15 @@
   "name": "codecompass-pi",
   "version": "0.1.0",
   "description": "Pi extension for CodeCompass-first navigation and guardrails",
+  "author": "CodeCompass contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mmkumar5401/CodeCompass.git"
+  },
+  "homepage": "https://github.com/mmkumar5401/CodeCompass/tree/main/pi-package",
+  "bugs": {
+    "url": "https://github.com/mmkumar5401/CodeCompass/issues"
+  },
   "keywords": ["pi-package"],
   "license": "MIT",
   "files": [
