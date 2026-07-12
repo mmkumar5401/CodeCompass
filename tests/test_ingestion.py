@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from ingestion.chunker import chunk_text
 from ingestion.graph_writer import write_triples
 from models.code_types import CodeTriple
 
@@ -14,27 +13,6 @@ def _make_triple(from_entity: str, rel: str, to_entity: str) -> CodeTriple:
         to_type="function",
         source_file="test.py",
         line_number=1,
-    )
-
-
-class TestChunker:
-    def test_chunk_text_basic(self):
-        # 8000 chars ≈ 2000 tokens; chunk at 500 tokens → must produce multiple chunks
-        text = "a" * 8000
-        chunks = chunk_text(text, tokens_per_chunk=500, overlap_tokens=50)
-        assert len(chunks) > 1
-
-    def test_chunk_text_overlap(self):
-        # 4000 chars ≈ 1000 tokens; chunk at 200 tokens → multiple chunks
-        text = "x" * 4000
-        chunks = chunk_text(text, tokens_per_chunk=200, overlap_tokens=50)
-        assert len(chunks) > 1
-
-    def test_chunk_text_short_input(self):
-        text = "hello world"
-        chunks = chunk_text(text, tokens_per_chunk=800, overlap_tokens=100)
-        assert chunks == ["hello world"]
-
 
 class TestGraphWriter:
     def test_deduplication(self):

@@ -48,7 +48,7 @@ class _CodeFileEventHandler(FileSystemEventHandler):
         self._project_root = project_root
         self._project_name = project_name
         self._client = client
-        self._file_id_map = file_id_map  # {rel_path: neo4j_file_node_id}
+        self._file_id_map = file_id_map  # {rel_path: file_node_id}
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if event.is_directory:
@@ -81,7 +81,7 @@ class _CodeFileEventHandler(FileSystemEventHandler):
     # ------------------------------------------------------------------
 
     def _handle_change(self, abs_path: str) -> None:
-        """Re-parse a changed file and apply only the delta to Neo4j."""
+        """Re-parse a changed file and apply only the delta to the local graph."""
         ext = Path(abs_path).suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
             return

@@ -13,12 +13,3 @@ def format_traversal_steps(steps: list[TraversalStep]) -> str:
             f"(score={score}): {step.reasoning}"
         )
     return "\n".join(lines)
-
-
-def format_subgraph_rows(rows: list[dict]) -> str:
-    """Format Neo4j subgraph rows for LLM prompts"""
-    return "\n".join(
-        f"({row['n.name']}) --[{row['r.type']}]--> ({row['m.name']})"
-        + (f": {row['r.description']}" if row.get("r.description") else "")
-        for row in rows
-    )

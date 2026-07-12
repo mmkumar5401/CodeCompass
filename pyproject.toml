@@ -23,7 +23,6 @@ dependencies = [
     "anthropic>=0.40.0",
     "fastmcp>=2.0.0",
     "networkx>=3.0",
-    "pypdf2>=3.0.0",
     "python-dotenv>=1.0.0",
     "rich>=13.0.0",
     "tqdm>=4.66.0",

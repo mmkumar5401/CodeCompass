@@ -1,4 +1,4 @@
-"""Hierarchy builder — walks a repo and writes the Project → Folder → File skeleton to Neo4j.
+"""Hierarchy builder — walks a repo and writes the Project → Folder → File skeleton to the local graph.
 
 This runs before code_parser so every file has a node to attach entities to.
 No API calls — purely local filesystem traversal.
@@ -24,9 +24,9 @@ _SOURCE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".sc
 
 
 def build_hierarchy(project_root: str, project_name: str, client) -> dict[str, str]:
-    """Walk project_root and write Project → Folder → File nodes to Neo4j.
+    """Walk project_root and write Project → Folder → File nodes to the local graph.
 
-    Returns a mapping of {relative_file_path: neo4j_node_id} so the caller
+    Returns a mapping of {relative_file_path: node_id} so the caller
     can attach entity nodes to the correct File nodes.
 
     Args:
