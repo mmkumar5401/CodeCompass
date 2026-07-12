@@ -1,0 +1,15 @@
+{
+  "name": "codecompass-pi",
+  "version": "0.1.0",
+  "description": "Pi extension for CodeCompass-first navigation and guardrails",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "files": [
+    "extensions",
+    "templates",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": ["./extensions/codecompass-guard.ts"]
+  }
+}

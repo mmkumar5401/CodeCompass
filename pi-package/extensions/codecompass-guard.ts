@@ -1,0 +1,173 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { execSync } from "node:child_process";
+
+// This extension is packaged so other repos can `pi install` it instead of
+// copying files. The system prompt text lives in templates/APPEND_SYSTEM.md
+// and the AGENTS.md template lives in templates/AGENTS.md. Keep those files
+// in sync with the repo's .pi/APPEND_SYSTEM.md and AGENTS.md. A sync check
+// script is available at scripts/check-pi-package-sync.sh.
+//
+// The extension also bootstraps the Python `codecompass-mcp` package via
+// `/codecompass-init`, so users do not need to run pip install manually.
+const TEMPLATE_DIR = join(__dirname, "..", "templates");
+
+// Search tools/commands and whole-file dumps — blocked. Use the graph to
+// discover, then read targeted slices.
+const _BLOCKED_TOOLS = new Set(["grep"]);
+const _BLOCKED_SHELL_RE = /(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)/;
+
+const _REASON =
+  "Don't use {what}. Discover through the graph — `codecompass query --map` " +
+  "(compact index to reason over) or `--search <kw>`, then `--flow`/`--impact`/" +
+  "`--deps` to trace — then read the specific slice you need with the Read tool " +
+  "(or `sed -n`/`head`/`tail`), not a whole-file dump.";
+
+function commandExists(name: string): boolean {
+  try {
+    execSync(`command -v ${name}`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function detectPackageSource(): string {
+  // Try to figure out where this extension was installed from so users don't
+  // have to type the package source every time.
+  const parts = __dirname.split(/[\\/]/);
+
+  const npmIdx = parts.indexOf("npm");
+  if (npmIdx !== -1 && parts[npmIdx + 1]) {
+    return `npm:${parts[npmIdx + 1]}`;
+  }
+
+  const gitIdx = parts.indexOf("git");
+  if (gitIdx !== -1 && parts[gitIdx + 1] && parts[gitIdx + 2] && parts[gitIdx + 3]) {
+    return `git:${parts[gitIdx + 1]}/${parts[gitIdx + 2]}/${parts[gitIdx + 3]}`;
+  }
+
+  // Fallback for local development or unknown install paths.
+  return "npm:codecompass-pi";
+}
+
+function loadSystemPrompt(): string {
+  const path = join(TEMPLATE_DIR, "APPEND_SYSTEM.md");
+  if (!existsSync(path)) {
+    // Fallback: the package was published without templates. This should not
+    // happen because package.json files[] includes templates/.
+    return "## Code graph\n\nUse codecompass for navigation.";
+  }
+  return readFileSync(path, "utf8");
+}
+
+export default function (pi: ExtensionAPI) {
+  const codecompassPrompt = loadSystemPrompt();
+
+  // Inject the CodeCompass system prompt on every turn.
+  pi.on("before_agent_start", async (event) => {
+    if (event.systemPrompt.includes("CodeCompass code knowledge graph")) {
+      return undefined;
+    }
+    return { systemPrompt: event.systemPrompt + "\n\n" + codecompassPrompt };
+  });
+
+  // Block raw text search and whole-file dumps.
+  pi.on("tool_call", async (event) => {
+    const toolName = event.toolName;
+
+    if (_BLOCKED_TOOLS.has(toolName)) {
+      return { block: true, reason: _REASON.replace("{what}", `the ${toolName} tool`) };
+    }
+
+    if (toolName === "bash") {
+      const command = String((event.input as { command?: string }).command ?? "");
+      if (_BLOCKED_SHELL_RE.test(command)) {
+        return { block: true, reason: _REASON.replace("{what}", "grep/rg/cat") };
+      }
+    }
+  });
+
+  // Notify users if codecompass is not installed yet.
+  pi.on("session_start", async (_event, ctx) => {
+    if (!commandExists("codecompass")) {
+      ctx.ui.notify(
+        "CodeCompass CLI not found. Run `/codecompass-init` to install it.",
+        "warning",
+      );
+    }
+  });
+
+  // /codecompass-init — mirrors `codecompass init` for Claude Code.
+  pi.registerCommand("codecompass-init", {
+    description: "Initialize CodeCompass guardrails in the current project",
+    handler: async (args, ctx) => {
+      const cwd = ctx.cwd;
+      const packageSource = args.trim() || detectPackageSource();
+
+      // 1. Ensure codecompass is installed.
+      if (!commandExists("codecompass")) {
+        ctx.ui.notify("Installing codecompass-mcp via pip...", "info");
+        try {
+          execSync("pip install codecompass-mcp", { stdio: "pipe" });
+          ctx.ui.notify("codecompass-mcp installed.", "info");
+        } catch (err) {
+          ctx.ui.notify(
+            `Failed to install codecompass-mcp: ${err instanceof Error ? err.message : String(err)}`,
+            "error",
+          );
+          return;
+        }
+      }
+
+      // 2. Copy AGENTS.md template into the project.
+      const agentsSrc = join(TEMPLATE_DIR, "AGENTS.md");
+      const agentsDst = join(cwd, "AGENTS.md");
+
+      if (!existsSync(agentsSrc)) {
+        ctx.ui.notify("Could not find AGENTS.md template in package", "error");
+        return;
+      }
+
+      if (existsSync(agentsDst)) {
+        const ok = await ctx.ui.confirm(
+          "AGENTS.md exists",
+          "Overwrite existing AGENTS.md with CodeCompass template?",
+        );
+        if (!ok) return;
+      }
+
+      writeFileSync(agentsDst, readFileSync(agentsSrc, "utf8"));
+
+      // 3. Create .pi/settings.json so the package auto-installs for others.
+      const piDir = join(cwd, ".pi");
+      const settingsPath = join(piDir, "settings.json");
+      let settings: { packages?: string[] } = {};
+
+      if (existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(readFileSync(settingsPath, "utf8")) as { packages?: string[] };
+        } catch {
+          ctx.ui.notify("Existing .pi/settings.json is invalid JSON", "error");
+          return;
+        }
+      } else {
+        mkdirSync(piDir, { recursive: true });
+      }
+
+      const packages = new Set(settings.packages ?? []);
+      packages.add(packageSource);
+      settings.packages = [...packages];
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+      // 4. Ingest the codebase.
+      try {
+        execSync("codecompass ingest-code", { cwd, stdio: "pipe" });
+        ctx.ui.notify("CodeCompass initialized: AGENTS.md, .pi/settings.json, graph ingested.", "info");
+      } catch (err) {
+        ctx.ui.notify(`Ingest failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+      }
+    },
+  });
+}

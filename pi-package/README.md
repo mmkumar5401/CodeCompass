@@ -1,0 +1,68 @@
+# codecompass-pi
+
+Pi package that enforces CodeCompass-first navigation.
+
+What it does:
+- Appends the CodeCompass system prompt on every turn.
+- Blocks raw text search (`grep`, `rg`, `cat`) so the agent uses the graph instead.
+- Provides `/codecompass-init` to set up a project the same way `codecompass init` does for Claude Code.
+
+Requires `codecompass` to be available on `PATH`. The `/codecompass-init` command installs it automatically via `pip install codecompass-mcp` if it is missing. Neo4j is optional; the local JSON graph at `.codecompass/graph.json` is sufficient for pi.
+
+## Keeping templates in sync
+
+The package ships copies of the guardrail files in `templates/`:
+
+- `templates/APPEND_SYSTEM.md` mirrors `.pi/APPEND_SYSTEM.md`
+- `templates/AGENTS.md` mirrors `AGENTS.md`
+
+These must stay byte-for-byte identical to the repo's source files. A sync check is provided:
+
+```bash
+./scripts/check-pi-package-sync.sh
+```
+
+If it reports a mismatch, copy the updated source file into `templates/`:
+
+```bash
+cp .pi/APPEND_SYSTEM.md pi-package/templates/APPEND_SYSTEM.md
+cp AGENTS.md pi-package/templates/AGENTS.md
+```
+
+## Install the package
+
+Global install (applies to all your pi sessions):
+
+```bash
+pi install git:github.com/<user>/codecompass
+```
+
+Local install (only current project):
+
+```bash
+pi install -l git:github.com/<user>/codecompass
+```
+
+## Initialize a project
+
+Inside any repo, run:
+
+```bash
+/codecompass-init
+```
+
+This will:
+1. Install `codecompass-mcp` via pip if it is missing.
+2. Copy `AGENTS.md` into the project.
+3. Create/update `.pi/settings.json` so the package auto-installs for anyone else who opens the repo with pi.
+4. Run `codecompass ingest-code`.
+
+The package source is auto-detected from where the extension was installed. Pass it explicitly only if you installed from a local path or want a different source:
+
+```bash
+/codecompass-init git:github.com/<user>/codecompass
+```
+
+## Automatic setup for new team members
+
+After `/codecompass-init`, the repo contains `.pi/settings.json` referencing the package. When another developer runs `pi` in that repo and trusts the project, pi automatically installs the package and the guardrails take effect immediately.

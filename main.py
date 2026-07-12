@@ -26,8 +26,10 @@ _CODECOMPASS_START = "<!-- codecompass-code-graph-start -->"
 _CODECOMPASS_END = "<!-- codecompass-code-graph-end -->"
 _CODECOMPASS_READ_INSTRUCTION = (
     "Orient through the code graph first: start from an entry point, see what's "
-    "there, then trace its flow and dependencies — rather than blind grepping. "
-    "Reach for grep/cat when you already know the string or symbol, or to verify."
+    "there, then trace its flow and dependencies — never use `cat`, `grep`, or "
+    "`rg` to search or read code content. Use the `codecompass query` commands "
+    "below for discovery and tracing, then read only the specific slices the "
+    "graph points you to."
 )
 
 
@@ -324,6 +326,7 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
 def _register_project_agents_md(repo_path: str) -> None:
     """Write or update the Code graph section in the project's AGENTS.md."""
     block = f"""{_CODECOMPASS_START}
+<!-- This file must stay byte-for-byte identical to its counterpart in pi-package/templates/. Run scripts/check-pi-package-sync.sh to verify. -->
 ## Code graph
 
 **{_CODECOMPASS_READ_INSTRUCTION}**
@@ -360,8 +363,18 @@ All commands default to the current directory — run them from the project root
 3. **Read** the specific slice the graph pointed you to (Read tool / `sed -n`),
    not the whole file.
 
-4. **Edit** — and before editing, `--impact`/`--blast-radius` the target so you
-   don't miss a caller or dependent. After adding/deleting files, re-ingest.
+4. **Edit** — before editing, verify the target fully so you don't break callers or dependents:
+   - Run `--deps <file>` to understand what the file relies on.
+   - Run `--flow <entry_symbol> --format json` (or `--flow-summary <entry_symbol>`) to trace the logic end-to-end.
+   - Run `--impact <symbol>` for every symbol you plan to change.
+   - Run `--blast-radius <file>` for every file you plan to change.
+   - Read the specific slices the graph identified.
+   - Then make the smallest correct change.
+
+   After any code change (edits, additions, deletions, renames, refactors), re-ingest so the graph stays current:
+   ```bash
+   codecompass ingest-code
+   ```
 
 ### Reading the results
 
@@ -403,8 +416,9 @@ scripts). Results are split into "likely dead" and (with `--include-entrypoints`
 "possible entry points".
 
 This is STATIC analysis: dynamic dispatch, reflection, and string-based
-invocation are invisible. Treat every result as a candidate — grep the name
-across the repo to confirm it is truly unused before deleting it.
+invocation are invisible. Treat every result as a candidate — use
+`codecompass query --grep <name>` or `--search <name>` to confirm it is truly
+unused before deleting it.
 
 ### Project notes: `overview.md`, `memory.md`, `learnings.md`
 
@@ -432,7 +446,7 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 
 ### When to re-ingest
 
-- After adding, renaming, or deleting source files
+- After every code change: edits, additions, deletions, renames, refactors
 - After major refactors (moved functions, renamed classes)
 - If query results look stale or incomplete
 
