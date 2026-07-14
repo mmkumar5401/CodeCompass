@@ -1,6 +1,6 @@
 {
   "name": "codecompass-pi",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "CodeCompass cut 66%-82% of token usage on real coding work. And used to map your codebase and reduce the amount of code your agent reads and opens.",
   "author": "CodeCompass contributors",
   "repository": {

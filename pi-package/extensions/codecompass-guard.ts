@@ -35,9 +35,12 @@ function detectPackageSource(): string {
   // have to type the package source every time.
   const parts = __dirname.split(/[\\/]/);
 
-  const npmIdx = parts.indexOf("npm");
-  if (npmIdx !== -1 && parts[npmIdx + 1]) {
-    return `npm:${parts[npmIdx + 1]}`;
+  const nodeModulesIdx = parts.lastIndexOf("node_modules");
+  if (nodeModulesIdx !== -1 && parts[nodeModulesIdx + 1]) {
+    const name = parts[nodeModulesIdx + 1].startsWith("@")
+      ? `${parts[nodeModulesIdx + 1]}/${parts[nodeModulesIdx + 2]}`
+      : parts[nodeModulesIdx + 1];
+    return `npm:${name}`;
   }
 
   const gitIdx = parts.indexOf("git");

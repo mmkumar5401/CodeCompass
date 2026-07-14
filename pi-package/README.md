@@ -1,15 +1,61 @@
 # codecompass-pi
 
-CodeCompass cut 66%-82% of token usage on real coding work. And used to map your codebase and reduce the amount of code your agent reads and opens.
+CodeCompass cut 66%-82% of token usage on real coding work. It maps your codebase into a queryable graph so your agent orients from a compact index instead of blind grepping and whole-file dumps.
 
-This package adds Pi guardrails and a one-shot `/codecompass-init` command on top of the `codecompass` CLI.
+[Pi](https://pi.dev) has no MCP support, so this package wires CodeCompass in the way pi actually works: a guardrail extension plus a **skill** that teaches the agent to drive the `codecompass` CLI over bash.
 
 What it does:
-- Appends the CodeCompass system prompt on every turn.
-- Blocks raw text search (`grep`, `rg`, `cat`) so the agent uses the graph instead.
-- Provides `/codecompass-init` to set up a project the same way `codecompass init` does for Claude Code.
+- Appends the CodeCompass system prompt on every turn, so the agent knows the graph exists and prefers it.
+- Blocks raw text search (`grep`, `rg`, `cat`) and whole-file dumps so the agent is pushed toward `codecompass query` instead.
+- Ships a `codecompass` skill (`.pi/skills/codecompass/SKILL.md`) documenting every CLI command the agent can call.
+- Provides `/codecompass-init` — a one-shot setup command, the pi equivalent of `codecompass init` for Claude Code.
 
-Requires `codecompass` to be available on `PATH`. The `/codecompass-init` command installs it automatically via `pip install codecompass-mcp` if it is missing. Neo4j is optional; the local JSON graph at `.codecompass/graph.json` is sufficient for pi.
+Requires `codecompass` on `PATH`. `/codecompass-init` installs it automatically via `pip install codecompass-mcp` if missing. Neo4j is optional — the local JSON graph at `.codecompass/graph.json` is sufficient for pi.
+
+## Quick start
+
+```bash
+pi install npm:codecompass-pi
+pi                        # start pi in your repo
+/codecompass-init         # one-time setup: AGENTS.md, skill, settings.json, first ingest
+```
+
+From then on the agent has the `codecompass` skill available and will reach for `codecompass query` instead of grep/cat.
+
+## CLI commands available to the agent
+
+Once installed, the agent drives CodeCompass entirely through bash — there's no MCP tool surface on pi. These are the commands documented in the shipped skill (`templates/skills/codecompass/SKILL.md`):
+
+```bash
+# index / re-index — run after any code change
+codecompass ingest-code
+
+# discovery
+codecompass query --tree                            # full project tree
+codecompass query --map                              # compact {file: [symbols]} index
+codecompass query --search "session cookie"          # keyword search
+codecompass query --grep "^get_"                      # regex over indexed entities
+
+# trace and impact
+codecompass query --impact "login()"                  # callers of an entity
+codecompass query --blast-radius src/auth.py          # files affected by a change
+codecompass query --batch-impact "foo()" "bar()"       # union blast radius for many targets
+codecompass query --deps src/auth.py                   # imports/dependencies
+codecompass query --flow "handle_request()"            # lean flow structure
+codecompass query --flow-summary "handle_request()"    # mermaid + narration
+codecompass query --styles LoginForm                    # CSS selectors styling an element
+
+# dead code
+codecompass query --dead-code
+codecompass query --dead-code --include-entrypoints
+
+# other
+codecompass init <repo_path>                            # create .codecompass/ stubs
+codecompass describe                                     # stage entity descriptions (user-triggered only)
+codecompass watch                                        # keep graph updated as files change
+```
+
+All commands default to the current directory; pass a repo path to run elsewhere. `codecompass describe` is expensive — only run it when the user explicitly asks. Re-run `codecompass ingest-code` if the graph is stale (>24h).
 
 ## Keeping templates in sync
 
