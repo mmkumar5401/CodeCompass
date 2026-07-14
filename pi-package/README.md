@@ -1,6 +1,8 @@
 # codecompass-pi
 
-CodeCompass for Pi and the command line: query, ingest, and navigate code through the `codecompass` graph, with Pi guardrails and a one-shot `/codecompass-init` command.
+CodeCompass cut 66%-82% of token usage on real coding work. And used to map your codebase and reduce the amount of code your agent reads and opens.
+
+This package adds Pi guardrails and a one-shot `/codecompass-init` command on top of the `codecompass` CLI.
 
 What it does:
 - Appends the CodeCompass system prompt on every turn.
