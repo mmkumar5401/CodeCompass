@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { execSync } from "node:child_process";
 
 // This extension is packaged so other repos can `pi install` it instead of
-// copying files. The system prompt text lives in templates/APPEND_SYSTEM.md
-// and the AGENTS.md template lives in templates/AGENTS.md. Keep those files
+// copying files. The system prompt text lives in templates/APPEND_SYSTEM.md,
+// the AGENTS.md template lives in templates/AGENTS.md, and the skill lives in
+// templates/skills/codecompass/SKILL.md. Keep APPEND_SYSTEM.md and AGENTS.md
 // in sync with the repo's .pi/APPEND_SYSTEM.md and AGENTS.md. A sync check
 // script is available at scripts/check-pi-package-sync.sh.
 //
@@ -130,7 +131,17 @@ export default function (pi: ExtensionAPI) {
 
       writeFileSync(agentsDst, readFileSync(agentsSrc, "utf8"));
 
-      // 3. Create .pi/settings.json so the package auto-installs for others.
+      // 3. Copy the CodeCompass skill into .pi so pi can load it on demand.
+      const skillSrc = join(TEMPLATE_DIR, "skills", "codecompass", "SKILL.md");
+      const skillDst = join(cwd, ".pi", "skills", "codecompass", "SKILL.md");
+      if (existsSync(skillSrc)) {
+        mkdirSync(join(cwd, ".pi", "skills", "codecompass"), { recursive: true });
+        if (!existsSync(skillDst)) {
+          writeFileSync(skillDst, readFileSync(skillSrc, "utf8"));
+        }
+      }
+
+      // 4. Create .pi/settings.json so the package auto-installs for others.
       const piDir = join(cwd, ".pi");
       const settingsPath = join(piDir, "settings.json");
       let settings: { packages?: string[] } = {};
@@ -151,10 +162,10 @@ export default function (pi: ExtensionAPI) {
       settings.packages = [...packages];
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 
-      // 4. Ingest the codebase.
+      // 5. Ingest the codebase.
       try {
         execSync("codecompass ingest-code", { cwd, stdio: "pipe" });
-        ctx.ui.notify("CodeCompass initialized: AGENTS.md, .pi/settings.json, graph ingested.", "info");
+        ctx.ui.notify("CodeCompass initialized: AGENTS.md, .pi/settings.json, .pi/skills/codecompass, graph ingested.", "info");
       } catch (err) {
         ctx.ui.notify(`Ingest failed: ${err instanceof Error ? err.message : String(err)}`, "error");
       }

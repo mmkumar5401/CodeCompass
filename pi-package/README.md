@@ -1,6 +1,6 @@
 # codecompass-pi
 
-Pi package that enforces CodeCompass-first navigation.
+CodeCompass for Pi and the command line: query, ingest, and navigate code through the `codecompass` graph, with Pi guardrails and a one-shot `/codecompass-init` command.
 
 What it does:
 - Appends the CodeCompass system prompt on every turn.
@@ -28,6 +28,16 @@ If it reports a mismatch, copy the updated source file into `templates/`:
 cp .pi/APPEND_SYSTEM.md pi-package/templates/APPEND_SYSTEM.md
 cp AGENTS.md pi-package/templates/AGENTS.md
 ```
+
+## Install the CLI
+
+The Pi extension needs the `codecompass` command on `PATH`. Install it first:
+
+```bash
+pip install codecompass-mcp
+```
+
+`/codecompass-init` will install it automatically if it is missing, but installing it yourself avoids the first-run pip prompt.
 
 ## Install the package
 
@@ -58,8 +68,9 @@ Inside any repo, run:
 This will:
 1. Install `codecompass-mcp` via pip if it is missing.
 2. Copy `AGENTS.md` into the project.
-3. Create/update `.pi/settings.json` so the package auto-installs for anyone else who opens the repo with pi.
-4. Run `codecompass ingest-code`.
+3. Create `.pi/skills/codecompass/SKILL.md` so pi can load the CodeCompass skill on demand.
+4. Create/update `.pi/settings.json` so the package auto-installs for anyone else who opens the repo with pi.
+5. Run `codecompass ingest-code`.
 
 The package source is auto-detected from where the extension was installed. Pass it explicitly only if you installed from a local path or want a different source:
 

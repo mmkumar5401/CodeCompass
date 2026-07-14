@@ -1,7 +1,7 @@
 {
   "name": "codecompass-pi",
-  "version": "0.1.1",
-  "description": "Pi extension for CodeCompass-first navigation and guardrails",
+  "version": "0.2.0",
+  "description": "CodeCompass CLI + Pi extension for graph-first code navigation. Query, ingest, and navigate repositories with codecompass, plus Pi guardrails and /codecompass-init.",
   "author": "CodeCompass contributors",
   "repository": {
     "type": "git",
