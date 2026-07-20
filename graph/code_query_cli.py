@@ -52,21 +52,6 @@ def fetch_grep(pattern: str, repo_path: str, project: str, field: str = "all",
                                  ignore_case=ignore_case, limit=limit)
 
 
-def fetch_search(query: str, repo_path: str, project: str, limit: int = 30,
-                 kind: str | None = None) -> dict:
-    """Search the graph for entities matching a keyword — the discovery entry point."""
-    with closing(get_client(repo_path)) as client:
-        rows = client.search_entities(query, project, limit=limit, kind=kind)
-    return {"query": query, "matches": rows, "count": len(rows)}
-
-
-def fetch_map(repo_path: str, project: str, include_tests: bool = False) -> dict:
-    """Compact `{file: [symbols]}` index for an agent to reason over during discovery."""
-    with closing(get_client(repo_path)) as client:
-        m = client.symbol_map(project, include_tests=include_tests)
-    return {"project": project, "files": m, "file_count": len(m)}
-
-
 def fetch_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS) -> dict:
     """Return what file_path imports as structured data."""
     with closing(get_client(repo_path)) as client:
@@ -204,7 +189,7 @@ def fetch_flow(start_name: str, repo_path: str, project: str, max_hops: int = DE
     edges = _order_edges(edges, project, start_name)
     lean_nodes = [
         {"id": n["id"], "name": n["name"], "kind": n.get("kind", ""),
-         "file": n.get("file", ""), "depth": n["depth"]}
+         "file": n.get("file", ""), "line": n.get("line"), "depth": n["depth"]}
         for n in sorted(nodes, key=lambda n: n["depth"])
     ]
     lean_edges = [
@@ -291,10 +276,6 @@ def main() -> None:
         run_flow(args.flow_summary, repo_path, project, max_hops=args.hops, rich=rich,
                  output=args.flow_output, include_external=args.include_external,
                  fmt=args.format if args.format != "drawio" else "mermaid")
-    elif args.map:
-        print(json.dumps(fetch_map(repo_path, project), indent=2))
-    elif args.search:
-        print(json.dumps(fetch_search(args.search, repo_path, project), indent=2))
     elif args.grep:
         print(json.dumps(fetch_grep(args.grep, repo_path, project), indent=2))
     elif args.dead_code:
@@ -325,16 +306,16 @@ def run_impact(entity_name: str, repo_path: str, project: str, max_hops: int = D
         console.print(f"\n[bold blue]Impact analysis:[/] {entity_name}")
         if stamp:
             console.print(stamp)
-        table = _make_table(title=f"Callers of '{entity_name}'", columns=["Caller", "Type", "File", "Depth"])
+        table = _make_table(title=f"Callers of '{entity_name}'", columns=["Caller", "Type", "File", "Line", "Depth"])
         for row in rows:
-            table.add_row(row.get("caller_name",""), row.get("caller_type",""), row.get("caller_file",""), str(row.get("depth","")))
+            table.add_row(row.get("caller_name",""), row.get("caller_type",""), row.get("caller_file",""), str(row.get("line") or ""), str(row.get("depth","")))
         console.print(table)
     else:
         if stamp:
             print(stamp)
         print(f"Callers of '{entity_name}':")
         for row in rows:
-            print(f"  {row.get('caller_name','')} ({row.get('caller_type','')}) in {row.get('caller_file','')} [depth {row.get('depth','')}]")
+            print(f"  {row.get('caller_name','')} ({row.get('caller_type','')}) in {row.get('caller_file','')}:{row.get('line') or '?'} [depth {row.get('depth','')}]")
 
 
 def run_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAULT_HOPS, rich: bool = False) -> None:
@@ -352,16 +333,16 @@ def run_deps(file_path: str, repo_path: str, project: str, max_hops: int = DEFAU
         console.print(f"\n[bold blue]Dependencies of:[/] {file_path}")
         if stamp:
             console.print(stamp)
-        table = _make_table(title=f"Dependencies of '{file_path}'", columns=["Module", "Type", "Depth"])
+        table = _make_table(title=f"Dependencies of '{file_path}'", columns=["Module", "Type", "Line", "Depth"])
         for row in rows:
-            table.add_row(row.get("dependency",""), row.get("dep_type",""), str(row.get("depth","")))
+            table.add_row(row.get("dependency",""), row.get("dep_type",""), str(row.get("line") or ""), str(row.get("depth","")))
         console.print(table)
     else:
         if stamp:
             print(stamp)
         print(f"Dependencies of '{file_path}':")
         for row in rows:
-            print(f"  {row.get('dependency','')} ({row.get('dep_type','')}) [depth {row.get('depth','')}]")
+            print(f"  {row.get('dependency','')} ({row.get('dep_type','')}) :{row.get('line') or '?'} [depth {row.get('depth','')}]")
 
 
 def run_styles(element_name: str, repo_path: str, project: str, rich: bool = False) -> None:
@@ -480,10 +461,11 @@ def run_dead_code(repo_path: str, project: str, rich: bool = False,
                 print(f"  {f}")
             for r in by_file[f]:
                 et = r.get("entity_type", "")
+                line = r.get("line") or "?"
                 if rich:
-                    console.print(f"    [yellow]{r['name']}[/] [dim]({et})[/]")
+                    console.print(f"    [yellow]{r['name']}[/] [dim]({et}) :{line}[/]")
                 else:
-                    print(f"    {r['name']} ({et})")
+                    print(f"    {r['name']} ({et}) :{line}")
 
     header = "[bold red]Dead-code candidates[/]" if rich else "Dead-code candidates"
     if rich:
@@ -948,10 +930,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--flow", metavar="ENTITY")
     parser.add_argument("--flow-summary", metavar="ENTITY",
                         help="Flow trace + rendered narration (mermaid by default) for a human")
-    parser.add_argument("--map", action="store_true",
-                        help="Compact {file: [symbols]} index to reason over during discovery")
-    parser.add_argument("--search", metavar="KEYWORDS",
-                        help="Keyword search over entity names/files/descriptions")
     parser.add_argument("--grep", metavar="REGEX",
                         help="Regex search over graph entities (grep for the graph)")
     parser.add_argument("--flow-output", metavar="PATH", default=None)

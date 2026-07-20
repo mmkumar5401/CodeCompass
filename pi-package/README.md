@@ -6,11 +6,11 @@ CodeCompass cut 66%-82% of token usage on real coding work. It maps your codebas
 
 What it does:
 - Appends the CodeCompass system prompt on every turn, so the agent knows the graph exists and prefers it.
-- Blocks raw text search (`grep`, `rg`, `cat`) and whole-file dumps so the agent is pushed toward `codecompass query` instead.
+- Blocks raw text search (`grep`, `rg`, `cat`) and whole-file dumps **inside codecompass-registered repos** (`~/.codecompass/repos`), so the agent is pushed toward `codecompass query` — reads outside any registered repo pass through.
 - Ships a `codecompass` skill (`.pi/skills/codecompass/SKILL.md`) documenting every CLI command the agent can call.
 - Provides `/codecompass-init` — a one-shot setup command, the pi equivalent of `codecompass init` for Claude Code.
 
-Requires `codecompass` on `PATH`. `/codecompass-init` installs it automatically via `pip install codecompass-mcp` if missing. Neo4j is optional — the local JSON graph at `.codecompass/graph.json` is sufficient for pi.
+Requires `codecompass` on `PATH`. `/codecompass-init` installs it automatically via `pip install codecompass-mcp` if missing. Everything is local — the graph is a single JSON file at `.codecompass/graph.json`.
 
 ## Quick start
 
@@ -32,8 +32,6 @@ codecompass ingest-code
 
 # discovery
 codecompass query --tree                            # full project tree
-codecompass query --map                              # compact {file: [symbols]} index
-codecompass query --search "session cookie"          # keyword search
 codecompass query --grep "^get_"                      # regex over indexed entities
 
 # trace and impact
@@ -51,11 +49,14 @@ codecompass query --dead-code --include-entrypoints
 
 # other
 codecompass init <repo_path>                            # create .codecompass/ stubs
-codecompass describe                                     # stage entity descriptions (user-triggered only)
+codecompass enrich                                       # stage descriptions + missing calls for an agent swarm (user-triggered only)
+codecompass enrich --apply                                 # merge staged enrich results into the graph
+codecompass add-entity <name> --file F --line N --description "..."  # record a parser-missed entity
+codecompass add-call <caller> <callee> --line N              # record a parser-missed call edge
 codecompass watch                                        # keep graph updated as files change
 ```
 
-All commands default to the current directory; pass a repo path to run elsewhere. `codecompass describe` is expensive — only run it when the user explicitly asks. Re-run `codecompass ingest-code` if the graph is stale (>24h).
+All commands default to the current directory; pass a repo path to run elsewhere. `codecompass enrich` is expensive — only run it when the user explicitly asks. Re-run `codecompass ingest-code` if the graph is stale (>24h).
 
 ## Keeping templates in sync
 

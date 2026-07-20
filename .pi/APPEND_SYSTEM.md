@@ -84,7 +84,7 @@ scripts). Results are split into "likely dead" and (with `--include-entrypoints`
 
 This is STATIC analysis: dynamic dispatch, reflection, and string-based
 invocation are invisible. Treat every result as a candidate — use
-`codecompass query --grep <name>` or `--search <name>` to confirm it is truly
+`codecompass query --grep <name>` to confirm it is truly
 unused before deleting it.
 
 ### Project notes: `overview.md`, `memory.md`, `learnings.md`
@@ -113,17 +113,29 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 
 ### When to re-ingest
 
+- BEFORE every ingest: flush what you learned while reading code — record missed
+  entities with `add_entity` (fill every field: kind, file, line, one-line
+  description; language is inferred from the file) and missed calls with
+  `add_call`. Agent-recorded data survives the rebuild.
 - After every code change: edits, additions, deletions, renames, refactors
 - If query results look stale or incomplete
 
-### Description enrichment — user-triggered ONLY
+### The graph improves with use — record what it missed
 
-`codecompass describe` (and `ingest-code --describe`) stage entity descriptions
-for an agent swarm to fill in (see `.codecompass/describe/INSTRUCTIONS.md` when
-staged). This is expensive and **must only run when the user explicitly asks**
-for descriptions to be added or refreshed (e.g. "describe this codebase",
-"add descriptions", "enrich the graph").
+While reading code you may find entities, calls, or important variables the
+parser didn't capture. Record them immediately with the MCP tools
+`add_entity(name, kind, file, line, description)` and
+`add_call(caller, callee, line)`. Both mark entries `agent_inferred` and skip
+anything ambiguous rather than guess. Small opportunistic writes keep the
+graph accurate between full `enrich` runs.
 
-**Do NOT run `describe` automatically** after re-ingesting, editing files, or
-any other routine step — routine re-ingestion is `codecompass ingest-code`
-with no `--describe` flag.
+### Enrichment — user-triggered ONLY
+
+`codecompass enrich` stages entities for an agent swarm to fill in one-line
+descriptions and missing call edges (see `.codecompass/enrich/INSTRUCTIONS.md`
+when staged; merge with `codecompass enrich --apply`). This is expensive and
+**must only run when the user explicitly asks** for enrichment (e.g. "enrich
+the graph", "add descriptions", "fill in missing calls").
+
+**Do NOT run `enrich` automatically** after re-ingesting, editing files, or
+any other routine step — routine re-ingestion is `codecompass ingest-code`.

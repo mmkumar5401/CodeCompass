@@ -70,7 +70,7 @@ All three parser-level features work across every call-based language:
 | Export / public-API awareness | ✅ | ✅ | ✅ (real `public`/`private`) |
 | Node de-merge (file **and** class) | ✅ | ✅ | ✅ |
 
-Graph-level features — de-merge, `grep`/`map`/`search`, the `resolved` flag,
+Graph-level features — de-merge, `grep`, the `resolved` flag,
 lean `flow` — are language-agnostic and cover HTML/CSS as well (selectors and
 elements de-merge by file; no receiver/type/export concept applies).
 

@@ -94,13 +94,39 @@ def init_project(repo_path: str) -> None:
 
     _ensure_gitignore(repo_path)
     _ensure_claude_hooks(repo_path)
+    _register_repo(repo_path)
     console.print(f"[bold green]Initialized CodeCompass in:[/] {compass_dir}")
     _register_project_agents_md(repo_path)
 
 
 _GITIGNORE_ENTRIES = [
-    (".codecompass/describe/", "# CodeCompass transient describe-swarm staging dir"),
+    (".codecompass/enrich/", "# CodeCompass transient enrich-swarm staging dir"),
 ]
+
+
+def _repos_registry_path() -> str:
+    """Global registry of codecompass repos, one absolute path per line."""
+    return os.environ.get(
+        "CODECOMPASS_REPOS",
+        os.path.join(os.path.expanduser("~"), ".codecompass", "repos"))
+
+
+def _register_repo(repo_path: str) -> None:
+    """Add the repo to the global registry so guard hooks block only reads
+    inside a codecompass project and allow everything outside one."""
+    try:
+        registry = _repos_registry_path()
+        os.makedirs(os.path.dirname(registry), exist_ok=True)
+        existing = set()
+        if os.path.exists(registry):
+            with open(registry) as f:
+                existing = {line.strip() for line in f if line.strip()}
+        abs_path = os.path.abspath(repo_path)
+        if abs_path not in existing:
+            with open(registry, "a") as f:
+                f.write(abs_path + "\n")
+    except OSError:
+        pass
 
 
 def _ensure_gitignore(repo_path: str) -> None:
@@ -126,47 +152,101 @@ def _ensure_gitignore(repo_path: str) -> None:
 
 
 # The PreToolUse hook that blocks code *search* and whole-file dumps, but allows
-# targeted reads. Discovery must go through the graph (--map / --search to find
+# targeted reads. Discovery must go through the graph (--grep to find
 # what's relevant, then --flow/--impact/--deps to trace), so raw text search
 # (grep/rg and the Grep/Glob tools) is blocked. Whole-file `cat` is blocked too:
 # read targeted slices with the Read tool (or sed -n/head/tail) once you know
 # what to open.
 _CLAUDE_HOOK_SCRIPT = r'''#!/usr/bin/env python3
-"""PreToolUse hook: block code search and whole-file dumps; allow targeted reads.
+"""PreToolUse hook: block code search and whole-file dumps INSIDE codecompass
+projects; allow reads outside any registered repo (no graph exists there).
 
-Installed by `codecompass init`. Safe to edit — init will not overwrite an existing copy.
+Installed by `codecompass init`. Safe to edit — init only rewrites copies it installed.
 """
 import json
+import os
 import re
 import sys
 
-# Search tools/commands and whole-file dumps — blocked. Use the graph to
-# discover, then read targeted slices.
+# This project's root, baked in at init time — fallback when the global
+# registry of codecompass repos is missing.
+_REPO = __CODECOMPASS_REPO__
+_REGISTRY = os.environ.get(
+    "CODECOMPASS_REPOS", os.path.expanduser("~/.codecompass/repos"))
+
 _BLOCKED_TOOLS = {"Grep", "Glob"}
 _BLOCKED_SHELL_RE = re.compile(r"(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)")
 
-_REASON = (
-    "Don't use {what}. Discover through the graph — `codecompass query --map` "
-    "(compact index to reason over) or `--search <kw>`, then `--flow`/`--impact`/"
-    "`--deps` to trace — then read the specific slice you need with the Read tool "
-    "(or `sed -n`/`head`/`tail`), not a whole-file dump."
-)
+
+def _repos() -> list:
+    try:
+        with open(_REGISTRY) as f:
+            repos = [line.strip() for line in f if line.strip()]
+        return repos or [_REPO]
+    except OSError:
+        return [_REPO]
+
+
+def _repo_containing(path: str):
+    """The registered codecompass repo containing path, or None."""
+    for repo in _repos():
+        if path == repo or path.startswith(repo + os.sep):
+            return repo
+    return None
+
+
+def _resolve(token: str, cwd: str) -> str:
+    p = os.path.expanduser(token)
+    if not os.path.isabs(p):
+        p = os.path.join(cwd, p)
+    return os.path.realpath(p)
+
+
+def _block(what: str, repo: str) -> None:
+    print(
+        f"Don't use {what}. Discover through the graph — `codecompass query "
+        f"\"{repo}\" --grep <pattern>` to find what's relevant, then "
+        "`--flow`/`--impact`/`--deps` to trace — then read the specific slice you "
+        "need with the Read tool (or `sed -n`/`head`/`tail`), not a whole-file dump.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 
 def main() -> None:
     payload = json.load(sys.stdin)
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {}) or {}
+    cwd = payload.get("cwd") or os.getcwd()
 
     if tool_name in _BLOCKED_TOOLS:
-        print(_REASON.format(what=f"the {tool_name} tool"), file=sys.stderr)
-        sys.exit(2)
+        target = _resolve(tool_input.get("path") or cwd, cwd)
+        repo = _repo_containing(target)
+        if repo:
+            _block(f"the {tool_name} tool", repo)
+        sys.exit(0)  # outside every codecompass repo — no graph to route through
 
     if tool_name == "Bash":
         command = str(tool_input.get("command", ""))
         if _BLOCKED_SHELL_RE.search(command):
-            print(_REASON.format(what="grep/rg/cat"), file=sys.stderr)
-            sys.exit(2)
+            saw_path = False
+            # ponytail: naive whitespace split — quoted paths with spaces don't
+            # resolve and fall through to the conservative cwd check.
+            for tok in command.split():
+                if tok.startswith("-"):
+                    continue
+                p = _resolve(tok, cwd)
+                if not os.path.exists(p):
+                    continue
+                saw_path = True
+                repo = _repo_containing(p)
+                if repo:
+                    _block("grep/rg/cat", repo)
+            if not saw_path:  # unparseable — decide by where the agent stands
+                repo = _repo_containing(os.path.realpath(cwd))
+                if repo:
+                    _block("grep/rg/cat", repo)
+            # every named path is outside all codecompass repos — allow
 
     sys.exit(0)
 
@@ -177,7 +257,9 @@ if __name__ == "__main__":
 
 # Tool names that should route through the block-file-search hook.
 _CLAUDE_HOOK_MATCHERS = ("Bash", "Grep", "Glob")
-_CLAUDE_HOOK_COMMAND = "python3 .claude/hooks/block-file-search.py"
+# $CLAUDE_PROJECT_DIR resolves to the project root, not the agent's cwd.
+_CLAUDE_HOOK_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-search.py"'
+_OLD_CLAUDE_HOOK_COMMAND = "python3 .claude/hooks/block-file-search.py"
 
 
 def _ensure_claude_hooks(repo_path: str) -> None:
@@ -192,9 +274,16 @@ def _ensure_claude_hooks(repo_path: str) -> None:
     os.makedirs(hooks_dir, exist_ok=True)
 
     hook_path = os.path.join(hooks_dir, "block-file-search.py")
-    if not os.path.exists(hook_path):
+    script = _CLAUDE_HOOK_SCRIPT.replace(
+        "__CODECOMPASS_REPO__", json.dumps(os.path.abspath(repo_path)))
+    write = not os.path.exists(hook_path)
+    if not write:  # rewrite only copies init installed, predating the registry
+        with open(hook_path) as f:
+            content = f.read()
+        write = "Installed by `codecompass init`" in content and "_REGISTRY" not in content
+    if write:
         with open(hook_path, "w") as f:
-            f.write(_CLAUDE_HOOK_SCRIPT)
+            f.write(script)
         os.chmod(hook_path, 0o755)
 
     settings_path = os.path.join(claude_dir, "settings.json")
@@ -224,6 +313,10 @@ def _ensure_claude_hooks(repo_path: str) -> None:
             changed = True
             continue
         entry_hooks = entry.setdefault("hooks", [])
+        for h in entry_hooks:  # migrate pre-$CLAUDE_PROJECT_DIR command paths
+            if h.get("command") == _OLD_CLAUDE_HOOK_COMMAND:
+                h["command"] = _CLAUDE_HOOK_COMMAND
+                changed = True
         if not any(h.get("command") == _CLAUDE_HOOK_COMMAND for h in entry_hooks):
             entry_hooks.append({"type": "command", "command": _CLAUDE_HOOK_COMMAND})
             changed = True
@@ -234,14 +327,13 @@ def _ensure_claude_hooks(repo_path: str) -> None:
             f.write("\n")
 
 
-def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None, describe: bool = False) -> None:
+def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None) -> None:
     """Ingest a codebase into the local code knowledge graph.
 
     Phase 1: Walk the repo and write the Project → Folder → File skeleton.
     Phase 2: Parse every source file with tree-sitter into CodeTriples.
     Phase 3: Normalize entity names via Haiku (only if --normalize is passed).
     Phase 4: Write all triples to the local graph.json.
-    Phase 5 (optional): Stage entity descriptions for an agent swarm to fill in.
     """
     import json
 
@@ -254,6 +346,13 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
         init_project(repo_path)
 
     client = get_client(repo_path)
+
+    # Preserve agent-authored data (add_entity/add_call, enrich --apply) across
+    # the rebuild — graph.clear() would otherwise wipe it every re-ingest.
+    agent_nodes = {nid: dict(a) for nid, a in client.graph.nodes(data=True)
+                   if a.get("agent_inferred")}
+    agent_edges = [(u, v, dict(e)) for u, v, e in client.graph.edges(data=True)
+                   if e.get("agent_inferred")]
     client.graph.clear()
 
     console.print("[dim]Phase 1/4 — Building hierarchy…[/]")
@@ -300,6 +399,21 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     console.print("[dim]Phase 4/4 — Writing to local graph…[/]")
     written = client.write_code_triples_batch(triples, file_id_map, project_name)
 
+    # Restore agent-authored data: if the parser regenerated the same node, keep
+    # the parser's structure but carry over the agent's description; otherwise
+    # re-add the agent node/edge wholesale.
+    for nid, attr in agent_nodes.items():
+        if nid in client.graph:
+            if attr.get("description"):
+                client.graph.nodes[nid]["description"] = attr["description"]
+        else:
+            client.graph.add_node(nid, **attr)
+    for u, v, e in agent_edges:
+        if u in client.graph and v in client.graph:
+            client.graph.add_edge(u, v, **e)
+    if agent_nodes or agent_edges:
+        client.save()
+
     total_nodes = client.node_count()
     client.close()
 
@@ -308,20 +422,6 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
         f"Graph now has {total_nodes} nodes."
     )
     _register_project_agents_md(repo_path)
-
-    if describe:
-        from ingestion.description_enricher import prepare_describe_batches
-        console.print("[dim]Phase 5/5 — Staging descriptions for the agent swarm…[/]")
-        staged = prepare_describe_batches(repo_path)
-        if staged["num_entities"] == 0:
-            console.print("[dim]  Nothing to describe.[/]")
-        else:
-            console.print(
-                f"[bold green]Staged[/] {staged['num_entities']} entities in "
-                f"{staged['num_batches']} batch(es). Read {staged['instructions_path']} "
-                "and dispatch a sub-agent per batch, then run "
-                f"`codecompass describe {repo_path} --apply`."
-            )
 
 
 def _register_project_agents_md(repo_path: str) -> None:
@@ -344,11 +444,8 @@ All commands default to the current directory — run them from the project root
 
    | You have… | Use | Example |
    |---|---|---|
-   | a feature request that names a concept ("session timeout", "adapter retries") | `--grep <concept>` first | `--grep "^Session"` — scope straight to it (cheap); only fall back to `--map` if the concept isn't a symbol name |
-   | a regex / name pattern | `--grep <regex>` | `--grep "^get_"`, `--grep ".*Adapter$"` |
-   | keywords | `--search <words>` | `--search "session cookie"` |
-   | a truly nameless need ("where does caching go?" with no `cache` symbol) | `--map` | read the compact index and reason about where it belongs |
-   | the full layout | `--tree` | (large — prefer `--map` for reasoning) |
+   | a concept, name, or pattern | `--grep <regex>` | `--grep "^Session"`, `--grep "^get_"`, `--grep ".*Adapter$"` |
+   | the full layout | `--tree` | (large — read it in slices) |
 
 2. **Trace** — understand relationships around a known symbol/file:
 
@@ -423,7 +520,7 @@ scripts). Results are split into "likely dead" and (with `--include-entrypoints`
 
 This is STATIC analysis: dynamic dispatch, reflection, and string-based
 invocation are invisible. Treat every result as a candidate — use
-`codecompass query --grep <name>` or `--search <name>` to confirm it is truly
+`codecompass query --grep <name>` to confirm it is truly
 unused before deleting it.
 
 ### Project notes: `overview.md`, `memory.md`, `learnings.md`
@@ -452,21 +549,33 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 
 ### When to re-ingest
 
+- BEFORE every ingest: flush what you learned while reading code — record missed
+  entities with `add_entity` (fill every field: kind, file, line, one-line
+  description; language is inferred from the file) and missed calls with
+  `add_call`. Agent-recorded data survives the rebuild.
 - After every code change: edits, additions, deletions, renames, refactors
 - After major refactors (moved functions, renamed classes)
 - If query results look stale or incomplete
 
-### Description enrichment — user-triggered ONLY
+### The graph improves with use — record what it missed
 
-`codecompass describe` (and `ingest-code --describe`) stage entity descriptions
-for an agent swarm to fill in (see `.codecompass/describe/INSTRUCTIONS.md` when
-staged). This is expensive and **must only run when the user explicitly asks**
-for descriptions to be added or refreshed (e.g. "describe this codebase",
-"add descriptions", "enrich the graph").
+While reading code you may find entities, calls, or important variables the
+parser didn't capture. Record them immediately with the MCP tools
+`add_entity(name, kind, file, line, description)` and
+`add_call(caller, callee, line)`. Both mark entries `agent_inferred` and skip
+anything ambiguous rather than guess. Small opportunistic writes keep the
+graph accurate between full `enrich` runs.
 
-**Do NOT run `describe` automatically** after re-ingesting, editing files, or
-any other routine step — routine re-ingestion is `codecompass ingest-code`
-with no `--describe` flag.
+### Enrichment — user-triggered ONLY
+
+`codecompass enrich` stages entities for an agent swarm to fill in one-line
+descriptions and missing call edges (see `.codecompass/enrich/INSTRUCTIONS.md`
+when staged; merge with `codecompass enrich --apply`). This is expensive and
+**must only run when the user explicitly asks** for enrichment (e.g. "enrich
+the graph", "add descriptions", "fill in missing calls").
+
+**Do NOT run `enrich` automatically** after re-ingesting, editing files, or
+any other routine step — routine re-ingestion is `codecompass ingest-code`.
 {_CODECOMPASS_END}"""
 
     agents_md_path = os.path.join(repo_path, "AGENTS.md")
@@ -547,13 +656,31 @@ def main():
     p_ingest.add_argument("repo_path", nargs="?", default=".")
     p_ingest.add_argument("--normalize", action="store_true")
     p_ingest.add_argument("--dump-triples", metavar="OUT")
-    p_ingest.add_argument("--describe", action="store_true")
 
-    p_describe = subparsers.add_parser("describe", help="Stage or apply entity descriptions")
-    p_describe.add_argument("repo_path", nargs="?", default=".")
-    p_describe.add_argument("--batch-size", type=int, default=15)
-    p_describe.add_argument("--force", action="store_true")
-    p_describe.add_argument("--apply", action="store_true")
+    p_enrich = subparsers.add_parser(
+        "enrich", help="Agent swarm fills descriptions + missing call edges")
+    p_enrich.add_argument("repo_path", nargs="?", default=".")
+    p_enrich.add_argument("--batch-size", type=int, default=15)
+    p_enrich.add_argument("--force", action="store_true")
+    p_enrich.add_argument("--apply", action="store_true")
+
+    p_add_entity = subparsers.add_parser(
+        "add-entity", help="Record an entity the parser missed (agent_inferred)")
+    p_add_entity.add_argument("name")
+    p_add_entity.add_argument("--repo", default=".")
+    p_add_entity.add_argument("--kind", default="function")
+    p_add_entity.add_argument("--file", default="")
+    p_add_entity.add_argument("--line", type=int, default=None)
+    p_add_entity.add_argument("--description", default="")
+    p_add_entity.add_argument("--language", default="",
+                              help="default: inferred from --file extension")
+
+    p_add_call = subparsers.add_parser(
+        "add-call", help="Record a CALLS edge the parser missed (agent_inferred)")
+    p_add_call.add_argument("caller")
+    p_add_call.add_argument("callee")
+    p_add_call.add_argument("--repo", default=".")
+    p_add_call.add_argument("--line", type=int, default=None)
 
     p_load = subparsers.add_parser("load-triples", help="Load pre-normalized triples into the graph")
     p_load.add_argument("triples_file")
@@ -584,28 +711,44 @@ def main():
             args.repo_path,
             normalize=args.normalize,
             dump_triples=args.dump_triples,
-            describe=args.describe,
         )
 
-    elif args.command == "describe":
+    elif args.command == "enrich":
         if args.apply:
-            from ingestion.description_enricher import apply_describe_results
-            updated = apply_describe_results(args.repo_path)
-            console.print(f"[bold green]Applied[/] descriptions for {updated} entities.")
+            from ingestion.enricher import apply_enrich_results
+            stats = apply_enrich_results(args.repo_path)
+            console.print(
+                f"[bold green]Applied[/] {stats['descriptions']} descriptions, "
+                f"added {stats['edges_added']} call edges "
+                f"({stats['calls_skipped']} ambiguous calls skipped)."
+            )
         else:
-            from ingestion.description_enricher import prepare_describe_batches
-            staged = prepare_describe_batches(
+            from ingestion.enricher import prepare_enrich_batches
+            staged = prepare_enrich_batches(
                 args.repo_path, batch_size=args.batch_size, force=args.force
             )
             if staged["num_entities"] == 0:
-                console.print("[dim]Nothing to describe.[/]")
+                console.print("[dim]Nothing to enrich.[/]")
             else:
                 console.print(
                     f"[bold green]Staged[/] {staged['num_entities']} entities in "
-                    f"{staged['num_batches']} batch(es) at {staged['describe_dir']}.\n"
+                    f"{staged['num_batches']} batch(es) at {staged['enrich_dir']}.\n"
                     f"Read {staged['instructions_path']} and dispatch a sub-agent per "
-                    f"batch, then run `codecompass describe {args.repo_path} --apply`."
+                    f"batch, then run `codecompass enrich {args.repo_path} --apply`."
                 )
+
+    elif args.command == "add-entity":
+        from ingestion.enricher import add_entity
+        r = add_entity(args.repo, args.name, kind=args.kind, file=args.file,
+                       line=args.line, description=args.description,
+                       language=args.language)
+        console.print(f"[bold green]{r['status']}[/] {r['id']}")
+
+    elif args.command == "add-call":
+        from ingestion.enricher import add_call
+        r = add_call(args.repo, args.caller, args.callee, line=args.line)
+        detail = r.get("reason") or f"{r.get('from')} -> {r.get('to')}"
+        console.print(f"[bold green]{r['status']}[/] {detail}")
 
     elif args.command == "load-triples":
         load_triples(args.triples_file, args.repo_path)

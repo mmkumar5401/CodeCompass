@@ -25,8 +25,6 @@ Run after any code change to keep `.codecompass/graph.json` current.
 
 ```bash
 codecompass query --tree                          # full project tree
-codecompass query --map                           # compact {file: [symbols]} index
-codecompass query --search "session cookie"       # keyword search
 codecompass query --grep "^get_"                  # regex over indexed entities
 ```
 
@@ -53,12 +51,16 @@ codecompass query --dead-code --include-entrypoints
 
 ```bash
 codecompass init <repo_path>                      # create .codecompass/ stubs
-codecompass describe                              # stage entity descriptions (user-triggered only)
+codecompass enrich                                # stage descriptions + missing calls for an agent swarm (user-triggered only)
+codecompass enrich --apply                        # merge staged enrich results into the graph
+codecompass add-entity <name> --file F --line N --description "..."  # record a parser-missed entity
+codecompass add-call <caller> <callee> --line N         # record a parser-missed call edge
 codecompass watch                                 # keep graph updated as files change
 ```
 
 ## Notes
 
 - All commands default to the current directory. Pass a repo path to run elsewhere.
-- `codecompass describe` is expensive and should only run when the user explicitly asks for descriptions.
+- `codecompass enrich` is expensive and should only run when the user explicitly asks for enrichment.
+- Use `add-entity`/`add-call` opportunistically while reading code: anything you find that the graph missed. Entries are marked `agent_inferred` and survive re-ingest. Before running `ingest-code`, flush what you learned this way.
 - If the graph is stale (>24h), re-run `codecompass ingest-code`.

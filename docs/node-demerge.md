@@ -41,7 +41,7 @@ class `Session` is defined; `_resolve_query_nodes("send")` → all `send` nodes.
 Updated in `find_callers`, `get_blast_radius`, `trace_flow`, `trace_calls`,
 `find_styles`, and the flow edge-ordering helpers.
 
-Node-iterating queries (`dead_code`, `search`, `map`) are unaffected — they
+Node-iterating queries (`dead_code`, `grep`) are unaffected — they
 never looked up by name.
 
 ## Class-level qualification (v2)
@@ -52,7 +52,7 @@ with an `invoke`). Class qualification fixes this:
 
 - Every triple carries `owner_class` — the class its `from_entity` is defined in
   (None for module-level). Method node ids become `project:{file}:{Class}.{name}`
-  (node `name` attr stays the bare method for grep/search).
+  (node `name` attr stays the bare method for grep).
 - Call resolution prefers a definition whose `owner_class == receiver_type`
   (`self.invoke()` in a `Command` method → `Command.invoke`), then falls back to
   same-file / single-candidate / name bucket.

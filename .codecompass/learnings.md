@@ -67,6 +67,25 @@ time by re-reading source files with tree-sitter.
 - Auto-layout (Mermaid) beats hand-positioned draw.io for fan-outs.
 - draw.io drops any edge lacking `<mxGeometry relative="1" as="geometry"/>`.
 
+## Session gotchas (2026-07)
+
+- **The installed `codecompass` binary goes stale** vs repo `main.py`. It once
+  regenerated AGENTS.md with an old template. When testing template/hook
+  changes, run `python3 main.py ...`, not the installed CLI.
+- **A loaded pi guard extension is only re-read at pi session start.**
+  Verifying new hook behavior via bash in the same session hits the OLD guard
+  (it blocked a legit `cat` mid-session, which also aborted the compound
+  command containing `init`). Test hooks by piping JSON directly to the script.
+- **argparse: intermixed positionals + optionals break `nargs="?"`** —
+  `add-entity NAME --file f .` left `.` unrecognized. Use `--repo` options
+  instead of a trailing repo_path positional.
+- **`graph.clear()` in ingest wipes agent contributions** unless snapshotted —
+  hence the `agent_inferred` marker on everything agent-written (enrich
+  descriptions included) and the snapshot/restore in `ingest_code`.
+- **Name collisions between module and function nodes are real** (`main`
+  module + `main` function in main.py): `_resolve_callee` correctly refuses
+  them as ambiguous. Don't "fix" the skip — qualify the name instead.
+
 ## AGENTS.md regeneration
 `init` and `ingest-code` both call `_register_project_agents_md()`, which replaces
 only the marked block (`<!-- codecompass-code-graph-start -->` … end) — user

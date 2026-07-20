@@ -31,10 +31,8 @@ The graph turns navigation into a cheap, deterministic loop:
 
    | You have… | Use |
    |---|---|
-   | a feature request that names a concept ("session timeout") | `grep` the concept |
-   | a regex / name pattern | `grep` |
-   | keywords | `search` |
-   | a vague, nameless need | `map` (compact index to reason over) |
+   | a concept, name, or pattern | `grep` (regex over graph entities) |
+   | the full layout | `tree` |
 
 2. **Trace** — a relationship around a known symbol/file:
 
@@ -104,8 +102,6 @@ The server speaks stdio MCP and defaults to the working directory.
 ```bash
 # discover
 codecompass query --grep "^get_"            # regex over graph entities
-codecompass query --search "session cookie" # keyword search
-codecompass query --map                     # compact {file: [symbols]} index
 
 # trace
 codecompass query --impact "Session.send"   # callers (disambiguated), with file:line
@@ -119,6 +115,21 @@ codecompass query --tree                     # full hierarchy
 
 Add `--hops N` for traversal depth (start at 1 and follow the one path you need). Add `--rich` for tables.
 
+### Enrichment (agent-in-the-loop)
+
+```bash
+codecompass enrich                 # stage entities for an agent swarm: one-line descriptions + missing call edges
+codecompass enrich --apply         # merge the swarm's results into the graph
+codecompass add-entity <name> --file src/a.py --line 9 --description "Async helper"
+codecompass add-call caller callee --line 2
+```
+
+`enrich` is a bulk, user-triggered pass. `add-entity`/`add-call` are the
+opportunistic version: as an agent reads code and spots something the parser
+missed, it records it immediately. Everything agent-written is marked
+`agent_inferred` and **preserved across re-ingests** — the graph gets better
+with use. Ambiguous call targets are skipped, never guessed.
+
 ### Flow: `flow` vs `flow-summary`
 
 - **`flow`** — lean structure only (node name/kind/file/depth, edge from/to/order/line). What an agent needs to navigate; no embedded source.
@@ -131,8 +142,6 @@ Add `--hops N` for traversal depth (start at 1 and follow the one path you need)
 | Tool | Returns |
 |---|---|
 | `grep(pattern, field, ignore_case)` | Regex search over graph entities |
-| `search(query, kind)` | Keyword search, ranked |
-| `map(include_tests)` | Compact `{file: [symbols]}` index |
 | `impact(symbol, hops)` | Callers/importers, disambiguated, with `resolved` + `line` |
 | `blast_radius(target, hops)` | Files reachable from a file or symbol |
 | `batch_impact(targets, hops)` | Union of blast radii for a multi-file change |
@@ -143,6 +152,9 @@ Add `--hops N` for traversal depth (start at 1 and follow the one path you need)
 | `dead_code(include_entrypoints)` | Entities with no inbound caller |
 | `styles(element)` | CSS selectors that style an element |
 | `tree()` | Full project hierarchy |
+| `enrich(apply, batch_size)` | Stage/merge agent-written descriptions + missing call edges |
+| `add_entity(name, kind, file, line, description)` | Record a parser-missed entity (`agent_inferred`) |
+| `add_call(caller, callee, line)` | Record a parser-missed CALLS edge (`agent_inferred`) |
 | `set_repo` / `get_repo` / `init` / `ingest` | Project selection & indexing |
 
 ---
@@ -170,11 +182,14 @@ are language-agnostic.
 `AGENTS.md` guides any agent through the discover→trace→read→edit loop. For
 Claude Code and [pi](https://pi.dev), `init` also installs a `PreToolUse` hook
 that **blocks code *search*** (`grep`/`rg`, the `Grep`/`Glob` tools) and
-**whole-file `cat`**, routing discovery through the graph — while leaving
-**targeted reads free** (the `Read` tool, `sed -n`, `head`/`tail`). The point is
-to change the default reflex to graph-first, not to remove reads. Both pick the
-files up after a one-time trust prompt (they execute shell commands). The hook
-is a plain file under `.claude/hooks/` — edit or delete it to adjust.
+**whole-file `cat` — but only inside a codecompass-registered repo** (tracked in
+`~/.codecompass/repos`, one line per `init`'d project). Reads outside any
+registered repo pass through: no graph exists there, so nothing is blocked.
+**Targeted reads stay free** (the `Read` tool, `sed -n`, `head`/`tail`). The
+point is to change the default reflex to graph-first, not to remove reads.
+Each project's Claude hook lives under its own `.claude/hooks/` with the
+project root baked in — edit or delete it to adjust. Block messages point the
+agent at the right repo's graph: `codecompass query \"<repo>\" --grep …`.
 
 ---
 
@@ -186,8 +201,11 @@ Source files
    ▼  code_parser         tree-sitter extraction (no API calls) → typed CodeTriples
    ▼  graph.json          NetworkX MultiDiGraph as JSON; file+class-qualified nodes,
                           typed edges (CALLS/IMPORTS/INHERITS/STYLES/…), resolved calls
-   ▼  code_query_cli      traversal: grep / search / map / impact / blast-radius /
+   ▼  code_query_cli      traversal: grep / impact / blast-radius /
                           deps / flow / dead-code / tree
+   ▼  enricher            agent-in-the-loop: enrich batches (descriptions +
+                          missing calls) and opportunistic add_entity/add_call
+                          writes — agent_inferred, preserved across re-ingest
 ```
 
 Everything runs locally, in-process. No network, no database, no API keys.
@@ -204,7 +222,9 @@ your-project/
 
 ## Limitations
 
-- **Structure, not semantics** — the graph knows what calls what, not what it means.
+- **Structure first, semantics optional** — the parser knows what calls what,
+  not what it means. `enrich` closes that gap with agent-written descriptions
+  and missed edges, marked `agent_inferred`.
 - **Static analysis** — dynamic dispatch, reflection, and string-based invocation
   can't be fully resolved. `impact` surfaces those flagged `resolved: false`, and
   `dead_code` results are always candidates to verify.

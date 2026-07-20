@@ -30,8 +30,6 @@ from graph.code_query_cli import (
     fetch_flow_summary,
     fetch_grep,
     fetch_impact,
-    fetch_map,
-    fetch_search,
     fetch_styles,
     fetch_trace,
     fetch_tree,
@@ -168,35 +166,6 @@ def grep(pattern: str, field: str = "all", ignore_case: bool = True, limit: int 
 
 
 @mcp.tool()
-def map(include_tests: bool = False) -> dict:
-    """Compact `{file: [symbols]}` index of the codebase — the discovery entry
-    point for a vague task.
-
-    Returns every implementation symbol grouped by file, names only (a few
-    thousand tokens, ~37x leaner than `tree`). Read it once and use your own
-    judgment to find where a feature belongs — e.g. for "add response caching"
-    you can see the request handler and the response-send functions and reason
-    about where to hook in — then drill in with flow/impact/deps. Prefer this
-    over keyword `search` when intent is semantic, not a literal string.
-    """
-    return _tool(fetch_map, include_tests=include_tests)
-
-
-@mcp.tool()
-def search(query: str, limit: int = 30, kind: str = "") -> dict:
-    """Find entities in the graph by keyword — start here when you don't yet know
-    a symbol name.
-
-    Matches the query against entity names, files, and descriptions and returns a
-    ranked, lean candidate list (name/kind/file). This is the discovery step for a
-    vague task ("caching", "request handler", "session"): search to find the
-    relevant symbols, then drill in with impact/flow/deps. Optional `kind` filters
-    by entity type (e.g. "function", "class").
-    """
-    return _tool(fetch_search, query, limit=limit, kind=kind or None)
-
-
-@mcp.tool()
 def flow(
     entry_symbol: str,
     hops: int = DEFAULT_HOPS,
@@ -267,6 +236,57 @@ def ingest() -> dict:
     _ensure_initialized(repo)
     ingest_code(repo)
     return {"status": "ok", "repo": repo, "project": os.path.basename(repo)}
+
+
+@mcp.tool()
+def enrich(apply: bool = False, batch_size: int = 15, force: bool = False) -> dict:
+    """Agent-driven graph enrichment: descriptions + missing call edges.
+
+    Default (apply=False) stages batches under .codecompass/enrich/ — read the
+    INSTRUCTIONS.md there, dispatch a sub-agent per batch file to write
+    descriptions and missing callers/callees, then call enrich(apply=True) to
+    merge results into the graph. Ambiguous call targets are skipped, never
+    guessed; agent-added edges carry agent_inferred=True.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    if apply:
+        from ingestion.enricher import apply_enrich_results
+        stats = apply_enrich_results(repo)
+        return {"status": "ok", **stats}
+    from ingestion.enricher import prepare_enrich_batches
+    return prepare_enrich_batches(repo, batch_size=batch_size, force=force)
+
+
+@mcp.tool()
+def add_entity(name: str, kind: str = "function", file: str = "",
+               line: int | None = None, description: str = "",
+               language: str = "") -> dict:
+    """Record an entity you found while reading code that the graph missed
+    (or under-described) — a function, class, or important variable the parser
+    didn't capture. Fill in every field you know (kind, file, line, a one-line
+    description); language is inferred from the file extension when omitted.
+    Upserts by name+file and marks it agent_inferred. Use this
+    opportunistically as you read code: every use makes the graph better.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    from ingestion.enricher import add_entity as _add
+    return _add(repo, name, kind=kind, file=file, line=line,
+                description=description, language=language)
+
+
+@mcp.tool()
+def add_call(caller: str, callee: str, line: int | None = None) -> dict:
+    """Record a CALLS edge you spotted in source that the parser missed
+    (dynamic dispatch, callbacks, string-based lookup). Both names must
+    resolve unambiguously — ambiguous targets are skipped, never guessed.
+    Idempotent: existing edges are left alone.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    from ingestion.enricher import add_call as _add
+    return _add(repo, caller, callee, line=line)
 
 
 def main() -> None:

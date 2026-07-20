@@ -1,6 +1,6 @@
 {
   "name": "codecompass-pi",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "CodeCompass cut 66%-82% of token usage on real coding work. And used to map your codebase and reduce the amount of code your agent reads and opens.",
   "author": "CodeCompass contributors",
   "repository": {
@@ -11,7 +11,9 @@
   "bugs": {
     "url": "https://github.com/mmkumar5401/CodeCompass/issues"
   },
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "license": "MIT",
   "files": [
     "extensions",
@@ -19,6 +21,8 @@
     "README.md"
   ],
   "pi": {
-    "extensions": ["./extensions/codecompass-guard.ts"]
+    "extensions": [
+      "./extensions/codecompass-guard.ts"
+    ]
   }
 }

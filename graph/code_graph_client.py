@@ -236,6 +236,11 @@ class LocalGraphClient:
             "project": project,
             "file": triple.source_file,
         })
+        # Definition line comes only from DEFINED_IN triples — a CALLS triple's
+        # line_number is the call site, not the definition. External symbols
+        # (never defined in-project) legitimately have no line.
+        if triple.relation_type == "DEFINED_IN" and triple.line_number:
+            self.graph.nodes[from_id]["line"] = triple.line_number
         # A symbol is public if any of its definitions is exported. Never let a
         # later non-exported definition clear a flag an earlier one set.
         if getattr(triple, "is_exported", False):
@@ -254,6 +259,9 @@ class LocalGraphClient:
             existing["language"] = language
             existing["kind"] = f"{triple.to_type}:{language}"
             existing["description"] = f"{language} {triple.to_type}"
+        # A module's definition is line 1 of its file.
+        if triple.relation_type == "DEFINED_IN" and triple.to_type == "module":
+            existing.setdefault("line", 1)
 
         self.graph.add_edge(
             from_id,
@@ -320,6 +328,13 @@ class LocalGraphClient:
                                  getattr(triple, "owner_class", None))
             to_id = self._resolve_to_id(triple, project, defs_by_name, class_file)
             self.write_code_triple(triple, file_id, project, from_id=from_id, to_id=to_id)
+
+        # Module nodes are the to-side of DEFINED_IN and may exist under a
+        # different resolved id — give every in-project module its line (1).
+        for _id, attr in self.graph.nodes(data=True):
+            if (attr.get("type") == "Entity" and attr.get("entity_type") == "module"
+                    and attr.get("file") and "line" not in attr):
+                attr["line"] = 1
 
         self.save()
         return len(triples)
@@ -543,6 +558,7 @@ class LocalGraphClient:
                         "name": a.get("name"),
                         "kind": a.get("kind"),
                         "file": a.get("file"),
+                        "line": a.get("line"),
                         "matched_field": f,
                         "match": m.group(0),
                     })
@@ -551,90 +567,6 @@ class LocalGraphClient:
                 break
         matches.sort(key=lambda r: (r["file"] or "", r["name"] or ""))
         return {"pattern": pattern, "matches": matches, "count": len(matches)}
-
-    def search_entities(self, query: str, project: str, limit: int = 30,
-                        kind: str | None = None) -> list[dict]:
-        """Find graph entities matching a keyword — the way in when you don't yet
-        know a symbol name.
-
-        Matches the query (case-insensitive) against each entity's name, file
-        path, and description. Any term may match (OR), and entities matching
-        more terms — and matching in the name rather than file/description — rank
-        highest, so the most on-point symbols come first.
-        Optional `kind` filters by entity_type (e.g. "function", "class").
-        Returns a lean list (name/kind/file/entity_type) to then feed into
-        impact/flow/deps.
-        """
-        terms = [t for t in query.lower().split() if t]
-        if not terms:
-            return []
-
-        scored = []
-        for _id, a in self.graph.nodes(data=True):
-            if a.get("type") != "Entity" or a.get("project") != project:
-                continue
-            if not a.get("file"):
-                continue
-            if kind and a.get("entity_type") != kind:
-                continue
-            name = (a.get("name") or "")
-            file = (a.get("file") or "")
-            desc = (a.get("description") or "")
-            hay_name = name.lower()
-            hay_rest = f"{file} {desc}".lower()
-            # any term may match (OR); score rewards name hits and more terms matched
-            score = 0
-            for t in terms:
-                if t == hay_name:
-                    score += 100
-                elif t in hay_name:
-                    score += 10
-                elif t in hay_rest:
-                    score += 1
-            if score == 0:
-                continue
-            scored.append((score, {
-                "name": name,
-                "entity_type": a.get("entity_type", ""),
-                "kind": a.get("kind", ""),
-                "file": file,
-            }))
-
-        scored.sort(key=lambda s: (-s[0], s[1]["file"], s[1]["name"]))
-        return [row for _s, row in scored[:limit]]
-
-    def symbol_map(self, project: str, include_tests: bool = False) -> dict:
-        """A compact index of the codebase for an agent to reason over.
-
-        Groups every source entity under its file as `{file: [names...]}` —
-        names only, no depth/kind/description bloat — so the whole map fits in a
-        few thousand tokens. The agent reads it once and uses its own judgment to
-        pick what's relevant to a vague task ("where would caching go?"), then
-        drills in with impact/flow/deps. This is the semantic-discovery entry
-        point that keyword `search` can't be: an LLM knows caching lives near the
-        request handler and response path even when nothing is named "cache".
-
-        `include_tests=False` (default) drops test/example files so the map shows
-        the actual implementation surface.
-        """
-        by_file: dict[str, list[str]] = {}
-        for _id, a in self.graph.nodes(data=True):
-            if a.get("type") != "Entity" or a.get("project") != project:
-                continue
-            f = a.get("file")
-            if not f:
-                continue
-            if not include_tests and ("test/" in f or "test\\" in f
-                                      or f.startswith("test") or "example" in f):
-                continue
-            name = a.get("name")
-            if name:
-                by_file.setdefault(f, [])
-                if name not in by_file[f]:
-                    by_file[f].append(name)
-        for f in by_file:
-            by_file[f].sort()
-        return dict(sorted(by_file.items()))
 
     def find_dependencies(self, file_path: str, project: str, max_hops: int = 3) -> list[dict]:
         """Return all modules imported (directly or transitively) by file_path."""
@@ -662,6 +594,7 @@ class LocalGraphClient:
                         results.append({
                             "dependency": node.get("name"),
                             "dep_type": node.get("entity_type"),
+                            "line": node.get("line"),
                             "depth": depth + 1
                         })
                     
@@ -710,6 +643,7 @@ class LocalGraphClient:
             "kind": start_attr.get("kind", ""),
             "description": start_attr.get("description", ""),
             "file": start_attr.get("file", ""),
+            "line": start_attr.get("line"),
             "depth": 0,
         }
 
@@ -743,6 +677,7 @@ class LocalGraphClient:
                         "kind": succ_attr.get("kind", ""),
                         "description": succ_attr.get("description", ""),
                         "file": succ_attr.get("file", ""),
+                        "line": succ_attr.get("line"),
                         "depth": depth + 1,
                     }
                     queue.append((succ, depth + 1))
@@ -776,6 +711,7 @@ class LocalGraphClient:
                             "callee_name": node.get("name"),
                             "callee_type": node.get("entity_type"),
                             "callee_file": node.get("file"),
+                            "line": node.get("line"),
                             "depth": depth + 1
                         })
                         visited.add(succ)
@@ -847,6 +783,7 @@ class LocalGraphClient:
                 "kind": attr.get("kind", ""),
                 "entity_type": attr.get("entity_type", ""),
                 "file": attr.get("file", ""),
+                "line": attr.get("line"),
             }
             # Exported symbols and name-heuristic entry points are public API:
             # having no in-repo caller is expected, not evidence of dead code.

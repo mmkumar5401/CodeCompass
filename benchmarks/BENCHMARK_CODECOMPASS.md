@@ -1,7 +1,7 @@
 # CodeCompass benchmark — token cost using the graph
 
 Run this on **any** repository to measure how many tokens it takes to complete a
-standard set of navigation/change tasks **using CodeCompass** (`map`, `search`,
+standard set of navigation/change tasks **using CodeCompass** (`grep`,
 `impact`, `blast_radius`, `deps`, `flow`, `dead_code`) plus targeted reads.
 
 Pair it with `BENCHMARK_BASELINE.md` (same tasks, grep/read only) to compare.
@@ -52,7 +52,7 @@ Pick an entry point (a request handler, a CLI command, a pipeline entry).
 ### T5 — Find-and-edit (anchored change)
 A small change at a known-ish anchor (e.g. "add a header next to the existing
 `X-*` header", "add a field next to an existing config default").
-- Discover the location: `search("<anchor keyword>")` or `map()` → then
+- Discover the location: `grep("<anchor keyword>")` → then
   `flow`/`impact` to confirm the exact function.
 - Read the specific slice, make the edit.
 - Record: tokens to pinpoint the edit site (the FIND phase), separate from apply.
@@ -60,7 +60,7 @@ A small change at a known-ish anchor (e.g. "add a header next to the existing
 ### T6 — Vague feature scoping (orientation)
 A product request with **no symbol given** (e.g. "add response caching",
 "add rate limiting", "add request logging").
-- Orient: `map()` (reason over the compact index to find where it belongs), then
+- Orient: `tree` (read the layout in slices to find where it belongs), then
   `flow`/`impact` on the candidate entry/exit points.
 - Produce a concrete plan: the files + functions + insertion points.
 - Record: tokens to reach the concrete plan.

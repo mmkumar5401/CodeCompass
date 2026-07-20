@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/block-file-search.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-search.py\""
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/block-file-search.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-search.py\""
           }
         ]
       },
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/block-file-search.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-search.py\""
           }
         ]
       }

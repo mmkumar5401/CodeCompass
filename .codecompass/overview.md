@@ -27,10 +27,16 @@ codecompass query --dead-code
 ```
 
 ## Main entry points
-- `main.py` — CLI dispatch: `init` / `ingest-code` / `query` / `watch`.
+- `main.py` — CLI dispatch: `init` / `ingest-code` / `enrich` / `add-entity` /
+  `add-call` / `query` / `watch` / `mcp`. Also owns the AGENTS.md template and
+  the generated `.claude` guard hook.
+- `mcp_server.py` — FastMCP server: all query tools plus `init` / `ingest` /
+  `enrich` / `add_entity` / `add_call` / `set_repo`.
 - `graph/code_query_cli.py` — all query subcommands (blast-radius, impact, deps,
-  trace, tree, dead-code, flow).
+  grep, tree, dead-code, flow).
 - `graph/code_graph_client.py` — NetworkX graph client (nodes, edges, traversal,
   `find_dead_code`).
 - `ingestion/code_parser.py` — tree-sitter entity + relationship extraction.
+- `ingestion/enricher.py` — agent-in-the-loop writes: `enrich` batch staging/apply,
+  `add_entity` / `add_call` (all marked `agent_inferred`).
 - `ingestion/source_context.py` — on-demand signature/docstring/snippet for flow.
