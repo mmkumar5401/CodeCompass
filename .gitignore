@@ -38,3 +38,6 @@ benchmarks/results/*.json
 
 # CodeCompass transient describe-swarm staging dir
 .codecompass/describe/
+
+# CodeCompass transient flow query outputs
+.codecompass/flow_*.json

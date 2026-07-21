@@ -290,6 +290,8 @@ def add_call(caller: str, callee: str, line: int | None = None) -> dict:
 
 
 def main() -> None:
+    from pi_setup import auto_setup_pi
+    auto_setup_pi()
     mcp.run()
 
 

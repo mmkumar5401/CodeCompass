@@ -1,6 +1,6 @@
 [project]
 name = "codecompass-mcp"
-version = "4.0.0"
+version = "4.1.0"
 description = "Structural code context for AI coding agents — a local code knowledge graph for blast radius, impact, deps, dead code, and flow tracing"
 readme = "README.md"
 license = {text = "MIT"}
@@ -52,4 +52,4 @@ build-backend = "setuptools.build_meta"
 include = ["graph*", "ingestion*", "models*"]
 
 [tool.setuptools]
-py-modules = ["main", "config", "mcp_server"]
+py-modules = ["main", "config", "mcp_server", "pi_setup"]

@@ -30,12 +30,16 @@ High-level architectural context and decisions.
   project root baked in (`_REPO`); settings.json invokes it via
   `$CLAUDE_PROJECT_DIR` so it works from subdirectories. `init` rewrites only
   hook copies it installed.
-- The pi guard (`.pi/extensions` + `pi-package/extensions`) implements the
-  same registry logic in TS and additionally injects `APPEND_SYSTEM.md` into
-  the system prompt every turn.
+- The pi guard is a lean TS extension (`_PI_GUARD_EXT` in `main.py`) written by
+  `_ensure_pi_extension` into `<repo>/.pi/extensions/` on init when pi is
+  installed. Project-local placement scopes it — no registry; it blocks
+  grep/rg/cat unconditionally in that repo.
+- `codecompass setup-pi` (`pi_setup.py`) wires pi globally: installs
+  `pi-mcp-adapter` if missing, copies the skill to `~/.pi/agent/skills/`, and
+  registers the `codecompass-mcp` server in `~/.config/mcp/mcp.json`. Auto-runs
+  (quiet) on the first CLI / MCP-server invocation. The former npm `pi-package`
+  is gone — the pip package bootstraps pi entirely.
 
-## Templates & sync
+## Templates
 - The AGENTS.md managed block lives in `main.py`; root `AGENTS.md` regenerates
-  on init/ingest; `pi-package/templates/AGENTS.md` regenerates via
-  `scripts/sync_pi_package_templates.py`; `scripts/check-pi-package-sync.sh`
-  diffs templates against `.pi/APPEND_SYSTEM.md`.
+  on init/ingest. The pi skill text is `_SKILL_MD` in `pi_setup.py`.

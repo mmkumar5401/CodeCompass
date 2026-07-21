@@ -12,6 +12,7 @@ import sys
 import os
 import re
 import json
+import shutil
 from dotenv import load_dotenv
 from rich.console import Console
 
@@ -94,6 +95,7 @@ def init_project(repo_path: str) -> None:
 
     _ensure_gitignore(repo_path)
     _ensure_claude_hooks(repo_path)
+    _ensure_pi_extension(repo_path)
     _register_repo(repo_path)
     console.print(f"[bold green]Initialized CodeCompass in:[/] {compass_dir}")
     _register_project_agents_md(repo_path)
@@ -327,6 +329,58 @@ def _ensure_claude_hooks(repo_path: str) -> None:
             f.write("\n")
 
 
+# pi has no settings-level tool guard, only extensions can veto a tool call.
+# This is the pi analog of the Claude PreToolUse hook: dropped into the repo's
+# .pi/extensions/, it loads only in this trusted project, so it blocks
+# unconditionally here — no repo registry needed, placement scopes it.
+# ponytail: blocks any grep/rg/cat while working in this project, even against a
+# path outside the repo. Add path-scoping like the Claude hook if that bites.
+_PI_GUARD_EXT = r'''// Installed by `codecompass init` into .pi/extensions/.
+// Blocks raw text search (grep/rg) and whole-file dumps (cat) so discovery
+// routes through the codecompass graph. Loads only in this trusted project.
+// Safe to edit — init only writes this file if it does not already exist.
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const BLOCKED_SHELL_RE = /(?:^|[;|&])\s*(grep|rg|cat)(?:\s|$)/;
+
+const REASON =
+  "Don't grep/cat/rg the repo. Discover through the codecompass graph — " +
+  "`codecompass query --grep <pattern>` to find what's relevant, then " +
+  "--flow/--impact/--deps to trace — then read the specific slice with the " +
+  "Read tool (or sed -n/head/tail), not a whole-file dump.";
+
+export default function (pi: ExtensionAPI) {
+  pi.on("tool_call", async (event) => {
+    if (event.toolName === "grep") {
+      return { block: true, reason: REASON };
+    }
+    if (event.toolName === "bash") {
+      const command = String((event.input as { command?: string }).command ?? "");
+      if (BLOCKED_SHELL_RE.test(command)) {
+        return { block: true, reason: REASON };
+      }
+    }
+    return undefined;
+  });
+}
+'''
+
+
+def _ensure_pi_extension(repo_path: str) -> None:
+    """Drop the pi guard extension into <repo>/.pi/extensions/ so pi blocks
+    grep/cat/rg the same way the Claude hook does. No-op when pi is not
+    installed. Never overwrites an existing copy."""
+    if shutil.which("pi") is None:
+        return
+    ext_dir = os.path.join(repo_path, ".pi", "extensions")
+    ext_path = os.path.join(ext_dir, "codecompass-guard.ts")
+    if os.path.exists(ext_path):
+        return
+    os.makedirs(ext_dir, exist_ok=True)
+    with open(ext_path, "w") as f:
+        f.write(_PI_GUARD_EXT)
+
+
 def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None) -> None:
     """Ingest a codebase into the local code knowledge graph.
 
@@ -427,7 +481,6 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
 def _register_project_agents_md(repo_path: str) -> None:
     """Write or update the Code graph section in the project's AGENTS.md."""
     block = f"""{_CODECOMPASS_START}
-<!-- This file must stay byte-for-byte identical to its counterpart in pi-package/templates/. Run scripts/check-pi-package-sync.sh to verify. -->
 ## Code graph
 
 **{_CODECOMPASS_READ_INSTRUCTION}**
@@ -694,6 +747,11 @@ def main():
 
     subparsers.add_parser("query", help="Run a graph query (passes through to code_query_cli)")
 
+    p_setup_pi = subparsers.add_parser(
+        "setup-pi", help="Wire CodeCompass into pi (skill + pi-mcp-adapter + mcp.json)")
+    p_setup_pi.add_argument("--force", action="store_true",
+                            help="Re-copy skill and config even if already set up")
+
     args, unknown = parser.parse_known_args()
 
     if args.command is None:
@@ -702,6 +760,14 @@ def main():
 
     if unknown and args.command != "query":
         parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+
+    if args.command == "setup-pi":
+        from pi_setup import setup_pi
+        setup_pi(force=args.force)
+        return
+
+    from pi_setup import auto_setup_pi
+    auto_setup_pi()
 
     if args.command == "init":
         init_project(args.repo_path)

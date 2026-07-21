@@ -1,5 +1,4 @@
 <!-- codecompass-code-graph-start -->
-<!-- This file must stay byte-for-byte identical to its counterpart in pi-package/templates/. Run scripts/check-pi-package-sync.sh to verify. -->
 ## Code graph
 
 **Orient through the code graph first: start from an entry point, see what's there, then trace its flow and dependencies — never use `cat`, `grep`, or `rg` to search or read code content. Use the `codecompass query` commands below for discovery and tracing, then read only the specific slices the graph points you to.**

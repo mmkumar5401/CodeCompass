@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.1.0] - 2026-07-21
+
+### Changed
+- **pi integration now rides on `pi-mcp-adapter` + MCP instead of a bundled npm
+  package.** Removed the `pi-package/` npm project, its template-sync scripts,
+  and the npm-publish workflow. `codecompass setup-pi` (also auto-run on the
+  first CLI / MCP-server invocation) wires pi globally: installs
+  `pi-mcp-adapter` if missing, copies the skill to `~/.pi/agent/skills/`, and
+  registers the `codecompass-mcp` server in `~/.config/mcp/mcp.json`.
+- **`codecompass init` drops a lean pi guard extension** into
+  `<repo>/.pi/extensions/` when pi is installed, blocking `grep`/`rg`/`cat` in
+  pi the same way the Claude PreToolUse hook does. Project-local placement
+  scopes it — no repo registry needed.
+
 ## [3.1.1] - 2026-07-11
 
 ### Fixed
