@@ -166,6 +166,22 @@ def grep(pattern: str, field: str = "all", ignore_case: bool = True, limit: int 
 
 
 @mcp.tool()
+def search(query: str, limit: int = 10) -> dict:
+    """Semantic vector search over entities — for concepts that aren't symbol names.
+
+    Matches the query against embedded entity name/kind/file/description, so
+    it finds things like "session timeout" or "caching" even when no symbol
+    carries those words. Use grep for exact names/patterns; use this when you
+    have an idea, not a name. Requires the optional vector deps
+    (`pip install 'codecompass-mcp[search]'`) and an ingest to build the index.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    from graph.vector_store import search_entities
+    return search_entities(repo, query, limit=limit)
+
+
+@mcp.tool()
 def flow(
     entry_symbol: str,
     hops: int = DEFAULT_HOPS,

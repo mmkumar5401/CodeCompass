@@ -1,6 +1,6 @@
 [project]
 name = "codecompass-mcp"
-version = "5.0.0"
+version = "5.1.0"
 description = "Structural code context for AI coding agents — a local code knowledge graph for blast radius, impact, deps, dead code, and flow tracing"
 readme = "README.md"
 license = {text = "MIT"}
@@ -38,6 +38,10 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.23.0",
+]
+search = [
+    "lancedb>=0.13.0",
+    "fastembed>=0.3.0",
 ]
 
 [project.scripts]

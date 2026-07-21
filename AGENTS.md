@@ -18,6 +18,7 @@ it at another repo.
    | You have… | Use | Example |
    |---|---|---|
    | a concept, name, or pattern | `grep` | `grep(pattern="^Session")`, `grep(pattern=".*Adapter$")` |
+   | an idea, not a name ("where does caching go?") | `search` | `search(query="session timeout")` — semantic vector search over entity names/kinds/files/descriptions (needs the optional `search` extra + an ingest to build the index) |
    | the full layout | `tree` | (large — read it in slices) |
 
 2. **Trace** — understand relationships around a known symbol/file:

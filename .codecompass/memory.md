@@ -40,6 +40,14 @@ High-level architectural context and decisions.
   (quiet) on the first CLI / MCP-server invocation. The former npm `pi-package`
   is gone — the pip package bootstraps pi entirely.
 
+## Vector search (optional)
+- `graph/vector_store.py` embeds entity name/kind/file/description into
+  `.codecompass/vectors.lance` (LanceDB + fastembed BGE-small, CPU/ONNX).
+- Lifecycle mirrors the graph: wiped and rebuilt wholesale at the end of every
+  `ingest_code` (Phase 5), so agent-inferred nodes restored during ingest are
+  included. Deps are the `search` extra; Phase 5 is skipped (with a printed
+  reason) when they're missing. Query path: MCP `search` → `search_entities`.
+
 ## Templates
 - The AGENTS.md managed block lives in `main.py`; root `AGENTS.md` regenerates
   on init/ingest. The pi skill text is `_SKILL_MD` in `pi_setup.py`.

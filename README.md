@@ -1,8 +1,8 @@
 # CodeCompass
 
-A local code knowledge graph that gives AI agents a map of your codebase — so they navigate by structure instead of grepping blind, and know what's connected before they edit.
+A local code knowledge graph that gives AI agents a map of your codebase — so they navigate by structure instead of grepping blind, and know what's connected before they edit. It learns as agents use it: parser misses they record are preserved across re-indexes, and an optional local vector index adds semantic search over everything in the graph.
 
-No database. No cloud. One JSON file per repo. Python, JavaScript/TypeScript, PHP, HTML/CSS.
+No cloud. No API keys for core queries. One JSON graph per repo, plus an optional LanceDB vector index. Python, JavaScript/TypeScript, PHP, HTML/CSS.
 
 ---
 
@@ -32,6 +32,7 @@ The graph turns navigation into a cheap, deterministic loop:
    | You have… | Use |
    |---|---|
    | a concept, name, or pattern | `grep` (regex over graph entities) |
+   | an idea, not a name ("where does caching go?") | `search` (semantic vector search) |
    | the full layout | `tree` |
 
 2. **Trace** — a relationship around a known symbol/file:
@@ -101,6 +102,21 @@ no agent-facing query CLI. `grep`, `impact`, `blast_radius`, `deps`, `flow`,
 `flow_summary`, `dead_code`, `tree` and friends are all MCP tools; pass
 `hops` for traversal depth (start at 1 and follow the one path you need).
 
+### Semantic search
+
+`grep` finds symbols when you know the name; `search` finds them when you only
+have the idea. It embeds every entity's name/kind/file/description into a local
+LanceDB index (`.codecompass/vectors.lance`) using fastembed's BGE-small model
+— ONNX, CPU-only, no API keys. Opt in with:
+
+```bash
+pip install 'codecompass-mcp[search]'
+```
+
+The index follows the graph's lifecycle: wiped and rebuilt at the end of every
+`ingest`, so parser nodes *and* agent-recorded ones are searchable. Without the
+extra, ingest simply skips the vector step.
+
 ### Enrichment (agent-in-the-loop)
 
 Via the MCP tools: `enrich` stages entities for an agent swarm (one-line
@@ -125,6 +141,7 @@ with use. Ambiguous call targets are skipped, never guessed.
 | Tool | Returns |
 |---|---|
 | `grep(pattern, field, ignore_case)` | Regex search over graph entities |
+| `search(query, limit)` | Semantic vector search over entity names/kinds/files/descriptions |
 | `impact(symbol, hops)` | Callers/importers, disambiguated, with `resolved` + `line` |
 | `blast_radius(target, hops)` | Files reachable from a file or symbol |
 | `batch_impact(targets, hops)` | Union of blast radii for a multi-file change |
@@ -190,25 +207,31 @@ Source files
    ▼  enricher            agent-in-the-loop: enrich batches (descriptions +
                           missing calls) and opportunistic add_entity/add_call
                           writes — agent_inferred, preserved across re-ingest
+   ▼  vector_store        optional: entity embeddings in vectors.lance (LanceDB
+                          + fastembed), wiped & rebuilt on every ingest
 ```
 
-Everything runs locally, in-process. No network, no database, no API keys.
+Everything runs locally, in-process. Core queries need no network, no database,
+no API keys; semantic search adds a local vector DB and a one-time model
+download.
 
 Inside each indexed project:
 
 ```
 your-project/
-├── .codecompass/graph.json   the code knowledge graph (auto-generated)
-└── AGENTS.md                 discovery guide for agents (auto-updated)
+├── .codecompass/graph.json      the code knowledge graph (auto-generated)
+├── .codecompass/vectors.lance/  semantic search index (optional, rebuilt on ingest)
+└── AGENTS.md                    discovery guide for agents (auto-updated)
 ```
 
 ---
 
 ## Limitations
 
-- **Structure first, semantics optional** — the parser knows what calls what,
-  not what it means. `enrich` closes that gap with agent-written descriptions
-  and missed edges, marked `agent_inferred`.
+- **Structure first, semantics layered on** — the parser knows what calls what,
+  not what it means. Two optional layers close that gap: `enrich` (agent-written
+  descriptions and missed edges, marked `agent_inferred`) and `search`
+  (semantic vector search over those descriptions and names).
 - **Static analysis** — dynamic dispatch, reflection, and string-based invocation
   can't be fully resolved. `impact` surfaces those flagged `resolved: false`, and
   `dead_code` results are always candidates to verify.

@@ -44,3 +44,6 @@ benchmarks/results/*.json
 
 # CodeCompass transient enrich-swarm staging dir
 .codecompass/enrich/
+
+# CodeCompass vector index (rebuilt on ingest)
+.codecompass/vectors.lance/

@@ -118,6 +118,7 @@ def init_project(repo_path: str) -> None:
 
 _GITIGNORE_ENTRIES = [
     (".codecompass/enrich/", "# CodeCompass transient enrich-swarm staging dir"),
+    (".codecompass/vectors.lance/", "# CodeCompass vector index (rebuilt on ingest)"),
 ]
 
 
@@ -537,6 +538,15 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     total_nodes = client.node_count()
     client.close()
 
+    # Phase 5 — rebuild the vector index from the final graph (parser nodes
+    # plus restored agent-inferred ones). Wipes and rewrites like the graph.
+    try:
+        from graph.vector_store import index_entities
+        n = index_entities(repo_path)
+        console.print(f"[dim]Phase 5/5 — Vector index rebuilt ({n} entities embedded)[/]")
+    except Exception as exc:
+        console.print(f"[dim]Phase 5/5 — Vector index skipped ({exc})[/]")
+
     console.print(
         f"[bold green]Done.[/] Wrote {written} triples. "
         f"Graph now has {total_nodes} nodes."
@@ -571,6 +581,7 @@ it at another repo.
    | You have… | Use | Example |
    |---|---|---|
    | a concept, name, or pattern | `grep` | `grep(pattern="^Session")`, `grep(pattern=".*Adapter$")` |
+   | an idea, not a name ("where does caching go?") | `search` | `search(query="session timeout")` — semantic vector search over entity names/kinds/files/descriptions (needs the optional `search` extra + an ingest to build the index) |
    | the full layout | `tree` | (large — read it in slices) |
 
 2. **Trace** — understand relationships around a known symbol/file:
