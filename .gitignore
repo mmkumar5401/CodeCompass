@@ -41,3 +41,6 @@ benchmarks/results/*.json
 
 # CodeCompass transient flow query outputs
 .codecompass/flow_*.json
+
+# CodeCompass transient enrich-swarm staging dir
+.codecompass/enrich/

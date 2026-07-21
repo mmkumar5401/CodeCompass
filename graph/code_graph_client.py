@@ -377,7 +377,7 @@ class LocalGraphClient:
         self.save()
 
     # ------------------------------------------------------------------
-    # Traversal queries used by code_query_cli
+    # Traversal queries used by graph/code_queries.py
     # ------------------------------------------------------------------
 
     def _resolve_query_nodes(self, entity_name: str, project: str) -> list[str]:

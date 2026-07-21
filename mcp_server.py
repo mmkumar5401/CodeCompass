@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 
-from graph.code_query_cli import (
+from graph.code_queries import (
     DEFAULT_HOPS,
     fetch_blast_radius,
     fetch_batch_impact,
@@ -220,22 +220,31 @@ def tree() -> dict:
 def init() -> dict:
     """Initialize .codecompass/ for the current repo and write AGENTS.md.
 
-    Safe to call repeatedly — it is a no-op if already initialized.
-    Query tools call this automatically, but exposing it lets the agent set
-    up the project explicitly when asked.
+    Safe to call repeatedly — init rewrites every generated file (AGENTS.md
+    block, claude.md instruction, guard hooks/extensions) so old versions
+    auto-update. Query tools call this automatically, but exposing it lets
+    the agent set up the project explicitly when asked.
     """
     repo = _active_repo()
-    _ensure_initialized(repo)
+    init_project(repo)
     return {"status": "ok", "repo": repo, "project": os.path.basename(repo)}
 
 
 @mcp.tool()
-def ingest() -> dict:
-    """Re-index the currently configured repo and rebuild the code knowledge graph."""
+def ingest(normalize: bool = False, dump_triples: str | None = None) -> dict:
+    """Re-index the currently configured repo and rebuild the code knowledge graph.
+
+    normalize: normalize entity names via Haiku (slower, needs an API key).
+    dump_triples: path to write the raw extracted triples as JSON instead of
+    loading them into the graph (debugging the parser)."""
     repo = _active_repo()
     _ensure_initialized(repo)
-    ingest_code(repo)
-    return {"status": "ok", "repo": repo, "project": os.path.basename(repo)}
+    ingest_code(repo, normalize=normalize, dump_triples=dump_triples)
+    return {"status": "ok", "repo": repo, "project": os.path.basename(repo),
+            "normalize": normalize, "dump_triples": dump_triples,
+            "next": "Record anything the parser missed while you were reading "
+                    "code: add_entity for entities, add_call for call edges. "
+                    "Agent-recorded data survives re-ingest."}
 
 
 @mcp.tool()

@@ -38,15 +38,27 @@ def test_hook_blocks_inside_repo_allows_outside(tmp_path):
     hook = _write_hook(tmp_path, str(repo))
     env = {**os.environ, "CODECOMPASS_REPOS": str(registry)}
 
-    # cat a file inside the repo -> blocked, reason names the repo
+    # cat a file inside the repo -> blocked, points at the MCP tools
     r = _run(hook, {"tool_name": "Bash",
                     "tool_input": {"command": "cat a.py"},
                     "cwd": str(repo)}, env)
-    assert r.returncode == 2 and str(repo) in r.stderr
+    assert r.returncode == 2 and "codecompass MCP tools" in r.stderr
 
     # cat a file outside every registered repo -> allowed
     r = _run(hook, {"tool_name": "Bash",
                     "tool_input": {"command": f"cat {outside}"},
+                    "cwd": str(repo)}, env)
+    assert r.returncode == 0
+
+    # git grep inside the repo -> blocked (word match, not just command position)
+    r = _run(hook, {"tool_name": "Bash",
+                    "tool_input": {"command": "git grep foo"},
+                    "cwd": str(repo)}, env)
+    assert r.returncode == 2
+
+    # git cat-file is not a search -> allowed
+    r = _run(hook, {"tool_name": "Bash",
+                    "tool_input": {"command": "git cat-file -p HEAD"},
                     "cwd": str(repo)}, env)
     assert r.returncode == 0
 

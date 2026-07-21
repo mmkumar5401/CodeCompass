@@ -42,63 +42,48 @@ description: Orient in any indexed repo through the CodeCompass code graph befor
 # CodeCompass
 
 CodeCompass maps a repo into a queryable graph so you orient from a compact
-index instead of grepping and dumping whole files. The tools are available as
-MCP tools (via pi-mcp-adapter) and as the `codecompass` CLI over bash.
+index instead of grepping and dumping whole files. The graph is queried ONLY
+through the codecompass MCP tools — there is no agent-facing CLI.
 
 Orient first: start from an entry point, trace its flow and dependencies, then
 read only the specific slices the graph points you to. Do not `grep`/`cat`/`rg`
 across the repo to find code.
 
+The server defaults to the current directory; call `codecompass_set_repo` to
+point it at another repo.
+
 ## Index / re-index
 
-```bash
-codecompass ingest-code            # run after any code change
-```
+- `codecompass_ingest` — run after any code change
 
 ## Discovery
 
-```bash
-codecompass query --tree                          # full project tree
-codecompass query --grep "^get_"                  # regex over indexed entities
-```
+- `codecompass_tree` — full project tree
+- `codecompass_grep` — regex over indexed entities, e.g. `pattern="^get_"`
 
 ## Trace and impact
 
-```bash
-codecompass query --impact "login()"              # callers of an entity
-codecompass query --blast-radius src/auth.py      # files affected by a change
-codecompass query --batch-impact "foo()" "bar()"  # union blast radius
-codecompass query --deps src/auth.py              # imports/dependencies
-codecompass query --flow "handle_request()"       # lean flow structure
-codecompass query --flow-summary "handle_request()" # mermaid + narration
-codecompass query --styles LoginForm              # CSS selectors for an element
-```
+- `codecompass_impact` — callers of an entity
+- `codecompass_blast_radius` — files affected by a change to a file/symbol
+- `codecompass_batch_impact` — union blast radius across targets
+- `codecompass_deps` — imports/dependencies of a file
+- `codecompass_flow` — lean flow structure from an entry point
+- `codecompass_flow_summary` — mermaid + narration, `format="json"` embeds signatures/source
+- `codecompass_styles` — CSS selectors for an element
+- `codecompass_dead_code` — entities with no inbound caller (`include_entrypoints=True` to also list entry points)
 
-## Dead code
+## Recording what the parser missed
 
-```bash
-codecompass query --dead-code
-codecompass query --dead-code --include-entrypoints
-```
-
-## Other
-
-```bash
-codecompass init <repo_path>       # create .codecompass/ stubs
-codecompass enrich                 # stage descriptions + missing calls (user-triggered only)
-codecompass enrich --apply         # merge staged enrich results into the graph
-codecompass add-entity <name> --file F --line N --description "..."  # record a parser-missed entity
-codecompass add-call <caller> <callee> --line N   # record a parser-missed call edge
-codecompass watch                  # keep the graph updated as files change
-```
+- `codecompass_add_entity` — record a parser-missed entity (kind, file, line, description)
+- `codecompass_add_call` — record a parser-missed call edge
 
 ## Notes
 
-- Commands default to the current directory; pass a repo path to run elsewhere.
-- `codecompass enrich` is expensive — only run it when the user explicitly asks.
-- Use `add-entity`/`add-call` opportunistically while reading; entries are marked
+- `codecompass_enrich` is expensive — only run it when the user explicitly asks.
+  Merge staged results with `codecompass_enrich(apply=True)`.
+- Use `add_entity`/`add_call` opportunistically while reading; entries are marked
   `agent_inferred` and survive re-ingest. Flush what you learned before re-ingesting.
-- If the graph is stale (>24h), re-run `codecompass ingest-code`.
+- If the graph looks stale or incomplete, re-run `codecompass_ingest`.
 """
 
 

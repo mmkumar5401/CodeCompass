@@ -75,13 +75,10 @@ Gives you the `codecompass` CLI and the `codecompass-mcp` MCP server.
 
 ### Index a project
 
-```bash
-cd /path/to/your/project
-codecompass init          # creates .codecompass/, writes AGENTS.md
-codecompass ingest-code   # parses source and builds the graph
-```
-
-`ingest-code` runs `init` automatically if needed. Re-ingest after refactors (or run `codecompass watch` to keep the graph live).
+Indexing is an MCP operation, not a CLI one. Start the server in your project
+(`codecompass mcp` — it auto-runs `init` on first use) and the agent calls the
+`ingest` tool to build the graph. Re-`ingest` after refactors, or run
+`codecompass watch` to keep the graph live.
 
 ### Connect an MCP client
 
@@ -97,34 +94,20 @@ The server speaks stdio MCP and defaults to the working directory.
 
 ---
 
-## Queries (CLI)
+## Queries
 
-```bash
-# discover
-codecompass query --grep "^get_"            # regex over graph entities
-
-# trace
-codecompass query --impact "Session.send"   # callers (disambiguated), with file:line
-codecompass query --blast-radius src/app.py  # what depends on this file
-codecompass query --deps src/api/routes.py   # what this file imports
-codecompass query --flow "Session.request"   # lean call-flow structure
-codecompass query --flow-summary "main"      # flow + mermaid + narration
-codecompass query --dead-code                # unreferenced candidates
-codecompass query --tree                     # full hierarchy
-```
-
-Add `--hops N` for traversal depth (start at 1 and follow the one path you need). Add `--rich` for tables.
+Agents query the graph through the MCP tools (see the table below) — there is
+no agent-facing query CLI. `grep`, `impact`, `blast_radius`, `deps`, `flow`,
+`flow_summary`, `dead_code`, `tree` and friends are all MCP tools; pass
+`hops` for traversal depth (start at 1 and follow the one path you need).
 
 ### Enrichment (agent-in-the-loop)
 
-```bash
-codecompass enrich                 # stage entities for an agent swarm: one-line descriptions + missing call edges
-codecompass enrich --apply         # merge the swarm's results into the graph
-codecompass add-entity <name> --file src/a.py --line 9 --description "Async helper"
-codecompass add-call caller callee --line 2
-```
+Via the MCP tools: `enrich` stages entities for an agent swarm (one-line
+descriptions + missing call edges), `enrich(apply=True)` merges the swarm's
+results, and `add_entity` / `add_call` record single parser-missed entries.
 
-`enrich` is a bulk, user-triggered pass. `add-entity`/`add-call` are the
+`enrich` is a bulk, user-triggered pass. `add_entity`/`add_call` are the
 opportunistic version: as an agent reads code and spots something the parser
 missed, it records it immediately. Everything agent-written is marked
 `agent_inferred` and **preserved across re-ingests** — the graph gets better
@@ -133,7 +116,7 @@ with use. Ambiguous call targets are skipped, never guessed.
 ### Flow: `flow` vs `flow-summary`
 
 - **`flow`** — lean structure only (node name/kind/file/depth, edge from/to/order/line). What an agent needs to navigate; no embedded source.
-- **`flow-summary`** — the trace rendered for a human: a mermaid flowchart with prose narration (`--format mermaid`, default), or source-embedded JSON (`--format json`), or a draw.io diagram (`--format drawio`). Written to `.codecompass/flow_<entry>.*`.
+- **`flow_summary`** — the trace rendered for a human: a mermaid flowchart with prose narration (`format="mermaid"`, default), or source-embedded JSON (`format="json"`), or a draw.io diagram (`format="drawio"`).
 
 ---
 
@@ -189,7 +172,7 @@ registered repo pass through: no graph exists there, so nothing is blocked.
 point is to change the default reflex to graph-first, not to remove reads.
 Each project's Claude hook lives under its own `.claude/hooks/` with the
 project root baked in — edit or delete it to adjust. Block messages point the
-agent at the right repo's graph: `codecompass query \"<repo>\" --grep …`.
+agent at the codecompass MCP tools (`grep`, `flow`, `impact`, `deps`, …).
 
 ---
 
@@ -201,8 +184,9 @@ Source files
    ▼  code_parser         tree-sitter extraction (no API calls) → typed CodeTriples
    ▼  graph.json          NetworkX MultiDiGraph as JSON; file+class-qualified nodes,
                           typed edges (CALLS/IMPORTS/INHERITS/STYLES/…), resolved calls
-   ▼  code_query_cli      traversal: grep / impact / blast-radius /
-                          deps / flow / dead-code / tree
+   ▼  code_queries       traversal helpers: grep / impact / blast_radius /
+                          deps / flow / dead_code / tree
+   ▼  mcp_server         FastMCP server — the only query surface for agents
    ▼  enricher            agent-in-the-loop: enrich batches (descriptions +
                           missing calls) and opportunistic add_entity/add_call
                           writes — agent_inferred, preserved across re-ingest

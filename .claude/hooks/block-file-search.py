@@ -2,7 +2,7 @@
 """PreToolUse hook: block code search and whole-file dumps INSIDE codecompass
 projects; allow reads outside any registered repo (no graph exists there).
 
-Installed by `codecompass init`. Safe to edit — init only rewrites copies it installed.
+Installed by the codecompass `init` tool. Safe to edit — init only rewrites copies it installed.
 """
 import json
 import os
@@ -16,7 +16,10 @@ _REGISTRY = os.environ.get(
     "CODECOMPASS_REPOS", os.path.expanduser("~/.codecompass/repos"))
 
 _BLOCKED_TOOLS = {"Grep", "Glob"}
-_BLOCKED_SHELL_RE = re.compile(r"(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)")
+# Word-boundary match anywhere in the command: catches `grep foo`,
+# `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
+# (?![\w-]) avoids false positives like `git cat-file`.
+_BLOCKED_SHELL_RE = re.compile(r"\b(?:grep|rg|cat)\b(?![\w-])")
 
 
 def _repos() -> list:
@@ -43,12 +46,12 @@ def _resolve(token: str, cwd: str) -> str:
     return os.path.realpath(p)
 
 
-def _block(what: str, repo: str) -> None:
+def _block(what: str) -> None:
     print(
-        f"Don't use {what}. Discover through the graph — `codecompass query "
-        f"\"{repo}\" --grep <pattern>` to find what's relevant, then "
-        "`--flow`/`--impact`/`--deps` to trace — then read the specific slice you "
-        "need with the Read tool (or `sed -n`/`head`/`tail`), not a whole-file dump.",
+        f"Don't use {what}. Discover through the codecompass MCP tools — "
+        "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — "
+        "then read the specific slice you need with the Read tool (or "
+        "`sed -n`/`head`/`tail`), not a whole-file dump.",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -64,7 +67,7 @@ def main() -> None:
         target = _resolve(tool_input.get("path") or cwd, cwd)
         repo = _repo_containing(target)
         if repo:
-            _block(f"the {tool_name} tool", repo)
+            _block(f"the {tool_name} tool")
         sys.exit(0)  # outside every codecompass repo — no graph to route through
 
     if tool_name == "Bash":
@@ -82,11 +85,11 @@ def main() -> None:
                 saw_path = True
                 repo = _repo_containing(p)
                 if repo:
-                    _block("grep/rg/cat", repo)
+                    _block("grep/rg/cat")
             if not saw_path:  # unparseable — decide by where the agent stands
                 repo = _repo_containing(os.path.realpath(cwd))
                 if repo:
-                    _block("grep/rg/cat", repo)
+                    _block("grep/rg/cat")
             # every named path is outside all codecompass repos — allow
 
     sys.exit(0)

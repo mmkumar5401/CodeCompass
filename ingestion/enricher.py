@@ -240,6 +240,7 @@ def add_entity(repo_path: str, name: str, kind: str = "function",
         if line:
             node["line"] = line
         node["agent_inferred"] = True
+        node["agent_created"] = True  # wholly agent-owned: resurrect on re-ingest
         client.save()
         return {"status": status, "id": node_id}
     finally:

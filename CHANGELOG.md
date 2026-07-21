@@ -1,5 +1,34 @@
 # Changelog
 
+## [5.0.0] - 2026-07-22
+
+### Removed
+- **BREAKING: the agent-facing CLI is gone — agents use MCP only.** Removed the
+  `codecompass query`, `init`, `ingest-code`, `add-entity`, and `add-call`
+  subcommands. Query/index/write operations are MCP tools (`grep`, `impact`,
+  `blast_radius`, `deps`, `flow`, `flow_summary`, `dead_code`, `tree`, `init`,
+  `ingest`, `enrich`, `add_entity`, `add_call`, `set_repo`). The CLI keeps only
+  operational commands: `enrich`, `load-triples`, `watch`, `mcp`, `setup-pi`.
+  `graph/code_query_cli.py` is now `graph/code_queries.py` (fetch helpers only).
+
+### Added
+- **`ingest` MCP tool accepts `normalize` and `dump_triples`** (previously CLI-only flags).
+- **`init` now drops `.pi/agent/AGENTS.md`** pointing at the root AGENTS.md, and
+  **rewrites every generated artifact** (AGENTS.md block, claude.md instruction,
+  Claude hook, pi extension) so old installs auto-update. Marker-bearing files
+  are refreshed; user-authored files and `graph.json` are never touched.
+
+### Changed
+- **All agent instructions point at MCP tools** — the AGENTS.md template,
+  claude.md stub, Claude hook block message, pi guard extension, and the pi skill.
+- **Guard hooks block word-boundary matches anywhere in a command** (`git grep`,
+  `sudo cat`, `xargs rg`), not just command position. `git cat-file` stays allowed.
+- **Agent-written graph data survives re-ingest without ghosts.** Enrich
+  descriptions map onto parser nodes by id (deleted/renamed functions are
+  dropped, not resurrected); `add_entity` nodes are marked `agent_created` and
+  re-added only while their file exists; the `agent_inferred` flag is now
+  restored alongside the description.
+
 ## [4.1.0] - 2026-07-21
 
 ### Changed

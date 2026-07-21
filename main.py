@@ -1,10 +1,14 @@
 """CodeCompass — code dependency index for LLM coding agents.
 
 Commands:
-    init <repo_path>
-    ingest-code <repo_path> [--normalize] [--dump-triples <out.json>]
+    enrich <repo_path> [--apply]
     load-triples <triples.json> <repo_path>
     watch <repo_path>
+    mcp [repo_path]
+    setup-pi
+
+Indexing (init / ingest-code) and agent writes (add-entity / add-call) are
+MCP tools — agents use the server, not this CLI.
 """
 
 import argparse
@@ -29,9 +33,9 @@ _CODECOMPASS_END = "<!-- codecompass-code-graph-end -->"
 _CODECOMPASS_READ_INSTRUCTION = (
     "Orient through the code graph first: start from an entry point, see what's "
     "there, then trace its flow and dependencies — never use `cat`, `grep`, or "
-    "`rg` to search or read code content. Use the `codecompass query` commands "
-    "below for discovery and tracing, then read only the specific slices the "
-    "graph points you to."
+    "`rg` to search or read code content. Use the codecompass MCP tools below "
+    "for discovery and tracing, then read only the specific slices the graph "
+    "points you to."
 )
 
 
@@ -79,7 +83,8 @@ def init_project(repo_path: str) -> None:
             with open(file_path, "w") as f:
                 f.write(content)
 
-    # ponytail: minimal way to create claude.md in repo root
+    # ponytail: minimal way to create claude.md in repo root. Existing copies
+    # get their instruction line refreshed so old versions auto-update.
     claude_md_path = os.path.join(repo_path, "claude.md")
     if not os.path.exists(claude_md_path):
         with open(claude_md_path, "w") as f:
@@ -87,7 +92,16 @@ def init_project(repo_path: str) -> None:
     else:
         with open(claude_md_path) as f:
             claude_md_content = f.read()
-        if _CODECOMPASS_READ_INSTRUCTION not in claude_md_content:
+        lines = claude_md_content.splitlines()
+        refreshed = False
+        for i, line in enumerate(lines):
+            if line.startswith("Orient through the code graph first") and line != _CODECOMPASS_READ_INSTRUCTION:
+                lines[i] = _CODECOMPASS_READ_INSTRUCTION
+                refreshed = True
+        if refreshed:
+            with open(claude_md_path, "w") as f:
+                f.write("\n".join(lines) + ("\n" if claude_md_content.endswith("\n") else ""))
+        elif _CODECOMPASS_READ_INSTRUCTION not in claude_md_content:
             with open(claude_md_path, "a") as f:
                 if claude_md_content and not claude_md_content.endswith("\n"):
                     f.write("\n")
@@ -96,6 +110,7 @@ def init_project(repo_path: str) -> None:
     _ensure_gitignore(repo_path)
     _ensure_claude_hooks(repo_path)
     _ensure_pi_extension(repo_path)
+    _ensure_pi_agents_md(repo_path)
     _register_repo(repo_path)
     console.print(f"[bold green]Initialized CodeCompass in:[/] {compass_dir}")
     _register_project_agents_md(repo_path)
@@ -154,16 +169,16 @@ def _ensure_gitignore(repo_path: str) -> None:
 
 
 # The PreToolUse hook that blocks code *search* and whole-file dumps, but allows
-# targeted reads. Discovery must go through the graph (--grep to find
-# what's relevant, then --flow/--impact/--deps to trace), so raw text search
-# (grep/rg and the Grep/Glob tools) is blocked. Whole-file `cat` is blocked too:
-# read targeted slices with the Read tool (or sed -n/head/tail) once you know
-# what to open.
+# targeted reads. Discovery must go through the graph (the codecompass MCP `grep`
+# tool to find what's relevant, then `flow`/`impact`/`deps` to trace), so raw
+# text search (grep/rg and the Grep/Glob tools) is blocked. Whole-file `cat` is
+# blocked too: read targeted slices with the Read tool (or sed -n/head/tail)
+# once you know what to open.
 _CLAUDE_HOOK_SCRIPT = r'''#!/usr/bin/env python3
 """PreToolUse hook: block code search and whole-file dumps INSIDE codecompass
 projects; allow reads outside any registered repo (no graph exists there).
 
-Installed by `codecompass init`. Safe to edit — init only rewrites copies it installed.
+Installed by the codecompass `init` tool. Safe to edit — init only rewrites copies it installed.
 """
 import json
 import os
@@ -177,7 +192,10 @@ _REGISTRY = os.environ.get(
     "CODECOMPASS_REPOS", os.path.expanduser("~/.codecompass/repos"))
 
 _BLOCKED_TOOLS = {"Grep", "Glob"}
-_BLOCKED_SHELL_RE = re.compile(r"(?:^|[;|&]|&&|\|\|)\s*(grep|rg|cat)(?:\s|$)")
+# Word-boundary match anywhere in the command: catches `grep foo`,
+# `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
+# (?![\w-]) avoids false positives like `git cat-file`.
+_BLOCKED_SHELL_RE = re.compile(r"\b(?:grep|rg|cat)\b(?![\w-])")
 
 
 def _repos() -> list:
@@ -204,12 +222,12 @@ def _resolve(token: str, cwd: str) -> str:
     return os.path.realpath(p)
 
 
-def _block(what: str, repo: str) -> None:
+def _block(what: str) -> None:
     print(
-        f"Don't use {what}. Discover through the graph — `codecompass query "
-        f"\"{repo}\" --grep <pattern>` to find what's relevant, then "
-        "`--flow`/`--impact`/`--deps` to trace — then read the specific slice you "
-        "need with the Read tool (or `sed -n`/`head`/`tail`), not a whole-file dump.",
+        f"Don't use {what}. Discover through the codecompass MCP tools — "
+        "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — "
+        "then read the specific slice you need with the Read tool (or "
+        "`sed -n`/`head`/`tail`), not a whole-file dump.",
         file=sys.stderr,
     )
     sys.exit(2)
@@ -225,7 +243,7 @@ def main() -> None:
         target = _resolve(tool_input.get("path") or cwd, cwd)
         repo = _repo_containing(target)
         if repo:
-            _block(f"the {tool_name} tool", repo)
+            _block(f"the {tool_name} tool")
         sys.exit(0)  # outside every codecompass repo — no graph to route through
 
     if tool_name == "Bash":
@@ -243,11 +261,11 @@ def main() -> None:
                 saw_path = True
                 repo = _repo_containing(p)
                 if repo:
-                    _block("grep/rg/cat", repo)
+                    _block("grep/rg/cat")
             if not saw_path:  # unparseable — decide by where the agent stands
                 repo = _repo_containing(os.path.realpath(cwd))
                 if repo:
-                    _block("grep/rg/cat", repo)
+                    _block("grep/rg/cat")
             # every named path is outside all codecompass repos — allow
 
     sys.exit(0)
@@ -264,12 +282,29 @@ _CLAUDE_HOOK_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-se
 _OLD_CLAUDE_HOOK_COMMAND = "python3 .claude/hooks/block-file-search.py"
 
 
+_GENERATED_MARKERS = ("Installed by `codecompass init`",
+                      "Installed by the codecompass `init` tool")
+
+
+def _is_generated(path: str) -> bool:
+    """True if path is a file init installed (carries our marker) — those get
+    rewritten on every init so old versions auto-update. Files without the
+    marker are user-authored and left alone."""
+    try:
+        with open(path) as f:
+            content = f.read()
+    except OSError:
+        return False
+    return any(m in content for m in _GENERATED_MARKERS)
+
+
 def _ensure_claude_hooks(repo_path: str) -> None:
     """Install the codecompass PreToolUse guardrail into the repo's .claude/ config.
 
-    Writes .claude/hooks/block-file-search.py (never overwriting an existing copy)
-    and merges the PreToolUse matchers into .claude/settings.json without clobbering
-    any hooks the user already configured.
+    Writes .claude/hooks/block-file-search.py, rewriting any copy init previously
+    installed (marker-bearing) so old versions auto-update. Merges the PreToolUse
+    matchers into .claude/settings.json without clobbering any hooks the user
+    already configured.
     """
     claude_dir = os.path.join(repo_path, ".claude")
     hooks_dir = os.path.join(claude_dir, "hooks")
@@ -278,12 +313,7 @@ def _ensure_claude_hooks(repo_path: str) -> None:
     hook_path = os.path.join(hooks_dir, "block-file-search.py")
     script = _CLAUDE_HOOK_SCRIPT.replace(
         "__CODECOMPASS_REPO__", json.dumps(os.path.abspath(repo_path)))
-    write = not os.path.exists(hook_path)
-    if not write:  # rewrite only copies init installed, predating the registry
-        with open(hook_path) as f:
-            content = f.read()
-        write = "Installed by `codecompass init`" in content and "_REGISTRY" not in content
-    if write:
+    if not os.path.exists(hook_path) or _is_generated(hook_path):
         with open(hook_path, "w") as f:
             f.write(script)
         os.chmod(hook_path, 0o755)
@@ -335,19 +365,22 @@ def _ensure_claude_hooks(repo_path: str) -> None:
 # unconditionally here — no repo registry needed, placement scopes it.
 # ponytail: blocks any grep/rg/cat while working in this project, even against a
 # path outside the repo. Add path-scoping like the Claude hook if that bites.
-_PI_GUARD_EXT = r'''// Installed by `codecompass init` into .pi/extensions/.
+_PI_GUARD_EXT = r'''// Installed by the codecompass `init` tool into .pi/extensions/.
 // Blocks raw text search (grep/rg) and whole-file dumps (cat) so discovery
 // routes through the codecompass graph. Loads only in this trusted project.
-// Safe to edit — init only writes this file if it does not already exist.
+// Safe to edit — init only rewrites copies that carry this marker.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const BLOCKED_SHELL_RE = /(?:^|[;|&])\s*(grep|rg|cat)(?:\s|$)/;
+// Word-boundary match anywhere in the command: catches `grep foo`,
+// `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
+// (?![\w-]) avoids false positives like `git cat-file`.
+const BLOCKED_SHELL_RE = /\b(?:grep|rg|cat)\b(?![\w-])/;
 
 const REASON =
-  "Don't grep/cat/rg the repo. Discover through the codecompass graph — " +
-  "`codecompass query --grep <pattern>` to find what's relevant, then " +
-  "--flow/--impact/--deps to trace — then read the specific slice with the " +
-  "Read tool (or sed -n/head/tail), not a whole-file dump.";
+  "Don't grep/cat/rg the repo. Discover through the codecompass MCP tools — " +
+  "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — " +
+  "then read the specific slice with the Read tool (or sed -n/head/tail), " +
+  "not a whole-file dump.";
 
 export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event) => {
@@ -369,16 +402,38 @@ export default function (pi: ExtensionAPI) {
 def _ensure_pi_extension(repo_path: str) -> None:
     """Drop the pi guard extension into <repo>/.pi/extensions/ so pi blocks
     grep/cat/rg the same way the Claude hook does. No-op when pi is not
-    installed. Never overwrites an existing copy."""
+    installed. Rewrites copies init previously installed so old versions
+    auto-update; leaves user-authored extensions alone."""
     if shutil.which("pi") is None:
         return
     ext_dir = os.path.join(repo_path, ".pi", "extensions")
     ext_path = os.path.join(ext_dir, "codecompass-guard.ts")
-    if os.path.exists(ext_path):
+    if os.path.exists(ext_path) and not _is_generated(ext_path):
         return
     os.makedirs(ext_dir, exist_ok=True)
     with open(ext_path, "w") as f:
         f.write(_PI_GUARD_EXT)
+
+
+def _ensure_pi_agents_md(repo_path: str) -> None:
+    """Drop .pi/agent/AGENTS.md pointing at the root AGENTS.md so pi picks up
+    the CodeCompass instructions. No-op when pi is not installed. Rewrites
+    copies init previously installed so old versions auto-update."""
+    if shutil.which("pi") is None:
+        return
+    agents_path = os.path.join(repo_path, ".pi", "agent", "AGENTS.md")
+    if os.path.exists(agents_path):
+        with open(agents_path) as f:
+            existing = f.read()
+        if not (_is_generated(agents_path) or "See AGENTS.md in the project root" in existing):
+            return  # user-authored — leave it alone
+    os.makedirs(os.path.dirname(agents_path), exist_ok=True)
+    with open(agents_path, "w") as f:
+        f.write(
+            "<!-- Installed by the codecompass `init` tool — rewritten on every init. -->\n"
+            "See AGENTS.md in the project root — it contains the CodeCompass "
+            "code-graph instructions for this repo.\n"
+        )
 
 
 def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None) -> None:
@@ -403,8 +458,16 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
 
     # Preserve agent-authored data (add_entity/add_call, enrich --apply) across
     # the rebuild — graph.clear() would otherwise wipe it every re-ingest.
-    agent_nodes = {nid: dict(a) for nid, a in client.graph.nodes(data=True)
-                   if a.get("agent_inferred")}
+    # - descriptions: parser-backed nodes described via enrich; mapped onto the
+    #   same id in the new graph. An id the parser no longer produces (function
+    #   deleted/renamed) is dropped, not resurrected.
+    # - created_nodes: wholly agent-created (add_entity) nodes, re-added unless
+    #   their file no longer exists.
+    descriptions = {nid: a["description"]
+                    for nid, a in client.graph.nodes(data=True)
+                    if a.get("agent_inferred") and a.get("description")}
+    created_nodes = {nid: dict(a) for nid, a in client.graph.nodes(data=True)
+                     if a.get("agent_created")}
     agent_edges = [(u, v, dict(e)) for u, v, e in client.graph.edges(data=True)
                    if e.get("agent_inferred")]
     client.graph.clear()
@@ -453,19 +516,22 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     console.print("[dim]Phase 4/4 — Writing to local graph…[/]")
     written = client.write_code_triples_batch(triples, file_id_map, project_name)
 
-    # Restore agent-authored data: if the parser regenerated the same node, keep
-    # the parser's structure but carry over the agent's description; otherwise
-    # re-add the agent node/edge wholesale.
-    for nid, attr in agent_nodes.items():
-        if nid in client.graph:
+    # Restore agent-authored data onto the new graph.
+    for nid, desc in descriptions.items():
+        if nid in client.graph:  # gone from source = dropped, not resurrected
+            client.graph.nodes[nid]["description"] = desc
+            client.graph.nodes[nid]["agent_inferred"] = True
+    for nid, attr in created_nodes.items():
+        if nid in client.graph:  # parser now produces it — carry the description
             if attr.get("description"):
                 client.graph.nodes[nid]["description"] = attr["description"]
-        else:
-            client.graph.add_node(nid, **attr)
-    for u, v, e in agent_edges:
+                client.graph.nodes[nid]["agent_inferred"] = True
+        elif not attr.get("file") or os.path.exists(os.path.join(repo_path, attr["file"])):
+            client.graph.add_node(nid, **attr)  # still missed by the parser
+    for u, v, e in agent_edges:  # edges to dropped nodes die with them
         if u in client.graph and v in client.graph:
             client.graph.add_edge(u, v, **e)
-    if agent_nodes or agent_edges:
+    if descriptions or created_nodes or agent_edges:
         client.save()
 
     total_nodes = client.node_count()
@@ -474,6 +540,11 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     console.print(
         f"[bold green]Done.[/] Wrote {written} triples. "
         f"Graph now has {total_nodes} nodes."
+    )
+    console.print(
+        "[dim]Next: record anything the parser missed — `add_entity` for "
+        "entities, `add_call` for call edges. Agent-recorded data survives "
+        "re-ingest.[/]"
     )
     _register_project_agents_md(repo_path)
 
@@ -489,7 +560,9 @@ This project has a CodeCompass code knowledge graph at `.codecompass/graph.json`
 Every node carries `kind` (e.g. `function:python`, `class:typescript`) and a
 human-readable `description`. Use it as your primary navigation tool.
 
-All commands default to the current directory — run them from the project root.
+The graph is queried through the codecompass MCP tools — there is no CLI for
+agents. The server defaults to the current directory; call `set_repo` to point
+it at another repo.
 
 ### The loop: discover → trace → read → edit
 
@@ -497,19 +570,19 @@ All commands default to the current directory — run them from the project root
 
    | You have… | Use | Example |
    |---|---|---|
-   | a concept, name, or pattern | `--grep <regex>` | `--grep "^Session"`, `--grep "^get_"`, `--grep ".*Adapter$"` |
-   | the full layout | `--tree` | (large — read it in slices) |
+   | a concept, name, or pattern | `grep` | `grep(pattern="^Session")`, `grep(pattern=".*Adapter$")` |
+   | the full layout | `tree` | (large — read it in slices) |
 
 2. **Trace** — understand relationships around a known symbol/file:
 
    | Question | Use |
    |---|---|
-   | who calls / would break if I change this symbol? | `--impact <symbol>` |
-   | what files are affected if I edit this file? | `--blast-radius <file>` |
-   | what does this file depend on? | `--deps <file>` |
-   | what does this entry point call, step by step? | `--flow <symbol>` (lean structure) |
-   | explain a flow to a human (diagram + narration) | `--flow-summary <symbol>` |
-   | is anything unused? | `--dead-code` |
+   | who calls / would break if I change this symbol? | `impact` |
+   | what files are affected if I edit this file? | `blast_radius` |
+   | what does this file depend on? | `deps` |
+   | what does this entry point call, step by step? | `flow` (lean structure) |
+   | explain a flow to a human (diagram + narration) | `flow_summary` |
+   | is anything unused? | `dead_code` |
 
 3. **Read** the specific slice the graph pointed you to (Read tool / `sed -n`),
    not the whole file.
@@ -520,26 +593,24 @@ All commands default to the current directory — run them from the project root
    text; rewrite the smallest slice that works, not the whole file.
 
 4. **Edit** — before editing, verify the target fully so you don't break callers or dependents:
-   - Run `--deps <file>` to understand what the file relies on.
-   - Run `--flow <entry_symbol> --format json` (or `--flow-summary <entry_symbol>`) to trace the logic end-to-end.
-   - Run `--impact <symbol>` for every symbol you plan to change.
-   - Run `--blast-radius <file>` for every file you plan to change.
+   - Run `deps` to understand what the file relies on.
+   - Run `flow` (or `flow_summary`) to trace the logic end-to-end.
+   - Run `impact` for every symbol you plan to change.
+   - Run `blast_radius` for every file you plan to change.
    - Read the specific slices the graph identified.
    - Then make the smallest correct change.
 
    After any code change (edits, additions, deletions, renames, refactors), re-ingest so the graph stays current:
-   ```bash
-   codecompass ingest-code
-   ```
+   call the `ingest` tool.
 
 ### Reading the results
 
-- `--impact` rows carry `resolved`: `true` = the receiver was statically typed
+- `impact` rows carry `resolved`: `true` = the receiver was statically typed
   (trust it); `false` = receiver type unknown, this call *might* target the
   symbol (verify by reading the slice at `caller_file:line`).
-- `--flow` is lean (structure only). Start at `hops=1` and only go deeper along
+- `flow` is lean (structure only). Start at `hops=1` and only go deeper along
   the one path you actually need — deep hops on a high-fan-out symbol are large.
-- `--dead-code` is a candidate list — static analysis misses dynamic dispatch,
+- `dead_code` is a candidate list — static analysis misses dynamic dispatch,
   so read each before removing.
 
 ### Graph vs. `ls`/`find`
@@ -551,29 +622,25 @@ structure or relationships, use the graph.
 ### Explaining how something works
 
 When asked to explain a pipeline, feature, or "what happens when X", do NOT
-guess from file names. Trace it:
+guess from file names. Trace it with the `flow_summary` tool (`format="json"`).
 
-```bash
-codecompass query --flow <entry_symbol> --format json
-```
-
-The JSON (written to `.codecompass/flow_<entry>.json`) gives you, for every
-function in the flow: its real signature, docstring, source snippet, and the
-ordered call sites (the `order` field on each edge is the call sequence by
-source line). Narrate the data flow from the entry point downward — describe
-what data enters and leaves each function using the signatures and docstrings,
-and explain the transformations from the source snippets.
+The JSON gives you, for every function in the flow: its real signature,
+docstring, source snippet, and the ordered call sites (the `order` field on
+each edge is the call sequence by source line). Narrate the data flow from the
+entry point downward — describe what data enters and leaves each function using
+the signatures and docstrings, and explain the transformations from the source
+snippets. For just the call structure without the embedded source, use `flow`.
 
 ### Finding dead code
 
-`codecompass query --dead-code` lists entities with no inbound caller or
+The `dead_code` tool lists entities with no inbound caller or
 importer — candidates for removal (old helpers, superseded versions, orphaned
-scripts). Results are split into "likely dead" and (with `--include-entrypoints`)
-"possible entry points".
+scripts). Results are split into "likely dead" and (with
+`include_entrypoints=True`) "possible entry points".
 
 This is STATIC analysis: dynamic dispatch, reflection, and string-based
-invocation are invisible. Treat every result as a candidate — use
-`codecompass query --grep <name>` to confirm it is truly
+invocation are invisible. Treat every result as a candidate — use the `grep`
+tool to confirm it is truly
 unused before deleting it.
 
 ### Project notes: `overview.md`, `memory.md`, `learnings.md`
@@ -602,11 +669,12 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 
 ### When to re-ingest
 
-- BEFORE every ingest: flush what you learned while reading code — record missed
-  entities with `add_entity` (fill every field: kind, file, line, one-line
-  description; language is inferred from the file) and missed calls with
-  `add_call`. Agent-recorded data survives the rebuild.
-- After every code change: edits, additions, deletions, renames, refactors
+- AFTER every ingest: always flush what you learned while reading code —
+  record missed entities with `add_entity` (fill every field: kind, file, line,
+  one-line description; language is inferred from the file) and missed calls
+  with `add_call`. Agent-recorded data survives the rebuild.
+- After every code change: edits, additions, deletions, renames, refactors —
+  call the `ingest` tool
 - After major refactors (moved functions, renamed classes)
 - If query results look stale or incomplete
 
@@ -621,14 +689,14 @@ graph accurate between full `enrich` runs.
 
 ### Enrichment — user-triggered ONLY
 
-`codecompass enrich` stages entities for an agent swarm to fill in one-line
+The `enrich` tool stages entities for an agent swarm to fill in one-line
 descriptions and missing call edges (see `.codecompass/enrich/INSTRUCTIONS.md`
-when staged; merge with `codecompass enrich --apply`). This is expensive and
+when staged; merge with `enrich(apply=True)`). This is expensive and
 **must only run when the user explicitly asks** for enrichment (e.g. "enrich
 the graph", "add descriptions", "fill in missing calls").
 
 **Do NOT run `enrich` automatically** after re-ingesting, editing files, or
-any other routine step — routine re-ingestion is `codecompass ingest-code`.
+any other routine step — routine re-ingestion is the `ingest` tool.
 {_CODECOMPASS_END}"""
 
     agents_md_path = os.path.join(repo_path, "AGENTS.md")
@@ -702,38 +770,12 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    p_init = subparsers.add_parser("init", help="Initialize .codecompass/ in a repo")
-    p_init.add_argument("repo_path", nargs="?", default=".")
-
-    p_ingest = subparsers.add_parser("ingest-code", help="Index a repo into the local graph")
-    p_ingest.add_argument("repo_path", nargs="?", default=".")
-    p_ingest.add_argument("--normalize", action="store_true")
-    p_ingest.add_argument("--dump-triples", metavar="OUT")
-
     p_enrich = subparsers.add_parser(
         "enrich", help="Agent swarm fills descriptions + missing call edges")
     p_enrich.add_argument("repo_path", nargs="?", default=".")
     p_enrich.add_argument("--batch-size", type=int, default=15)
     p_enrich.add_argument("--force", action="store_true")
     p_enrich.add_argument("--apply", action="store_true")
-
-    p_add_entity = subparsers.add_parser(
-        "add-entity", help="Record an entity the parser missed (agent_inferred)")
-    p_add_entity.add_argument("name")
-    p_add_entity.add_argument("--repo", default=".")
-    p_add_entity.add_argument("--kind", default="function")
-    p_add_entity.add_argument("--file", default="")
-    p_add_entity.add_argument("--line", type=int, default=None)
-    p_add_entity.add_argument("--description", default="")
-    p_add_entity.add_argument("--language", default="",
-                              help="default: inferred from --file extension")
-
-    p_add_call = subparsers.add_parser(
-        "add-call", help="Record a CALLS edge the parser missed (agent_inferred)")
-    p_add_call.add_argument("caller")
-    p_add_call.add_argument("callee")
-    p_add_call.add_argument("--repo", default=".")
-    p_add_call.add_argument("--line", type=int, default=None)
 
     p_load = subparsers.add_parser("load-triples", help="Load pre-normalized triples into the graph")
     p_load.add_argument("triples_file")
@@ -745,21 +787,16 @@ def main():
     p_mcp = subparsers.add_parser("mcp", help="Run the MCP server")
     p_mcp.add_argument("repo_path", nargs="?", default=".")
 
-    subparsers.add_parser("query", help="Run a graph query (passes through to code_query_cli)")
-
     p_setup_pi = subparsers.add_parser(
         "setup-pi", help="Wire CodeCompass into pi (skill + pi-mcp-adapter + mcp.json)")
     p_setup_pi.add_argument("--force", action="store_true",
                             help="Re-copy skill and config even if already set up")
 
-    args, unknown = parser.parse_known_args()
+    args = parser.parse_args()
 
     if args.command is None:
         parser.print_help()
         sys.exit(1)
-
-    if unknown and args.command != "query":
-        parser.error(f"unrecognized arguments: {' '.join(unknown)}")
 
     if args.command == "setup-pi":
         from pi_setup import setup_pi
@@ -769,17 +806,7 @@ def main():
     from pi_setup import auto_setup_pi
     auto_setup_pi()
 
-    if args.command == "init":
-        init_project(args.repo_path)
-
-    elif args.command == "ingest-code":
-        ingest_code(
-            args.repo_path,
-            normalize=args.normalize,
-            dump_triples=args.dump_triples,
-        )
-
-    elif args.command == "enrich":
+    if args.command == "enrich":
         if args.apply:
             from ingestion.enricher import apply_enrich_results
             stats = apply_enrich_results(args.repo_path)
@@ -803,26 +830,8 @@ def main():
                     f"batch, then run `codecompass enrich {args.repo_path} --apply`."
                 )
 
-    elif args.command == "add-entity":
-        from ingestion.enricher import add_entity
-        r = add_entity(args.repo, args.name, kind=args.kind, file=args.file,
-                       line=args.line, description=args.description,
-                       language=args.language)
-        console.print(f"[bold green]{r['status']}[/] {r['id']}")
-
-    elif args.command == "add-call":
-        from ingestion.enricher import add_call
-        r = add_call(args.repo, args.caller, args.callee, line=args.line)
-        detail = r.get("reason") or f"{r.get('from')} -> {r.get('to')}"
-        console.print(f"[bold green]{r['status']}[/] {detail}")
-
     elif args.command == "load-triples":
         load_triples(args.triples_file, args.repo_path)
-
-    elif args.command == "query":
-        from graph.code_query_cli import main as query_main
-        sys.argv = [f"{prog} query"] + unknown
-        query_main()
 
     elif args.command == "watch":
         watch_code(args.repo_path)

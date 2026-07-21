@@ -49,7 +49,7 @@ except Exception as e:
 # 4. Ingest the codebase into the code graph
 echo ""
 echo "→ Ingesting codebase into code graph (project: codecompass)..."
-python -m main ingest-code . --project codecompass
+python -c "from main import ingest_code; ingest_code('.')"
 echo "  Code graph ready."
 
 # 5. Set up memory files
