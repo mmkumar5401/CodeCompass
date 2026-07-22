@@ -16,6 +16,7 @@ from typing import Callable
 from rich.progress import track
 from tree_sitter import Language, Parser, Node
 
+from ingestion.ignore import walk as ignore_walk
 from models.code_types import CodeTriple
 
 # ---------------------------------------------------------------------------
@@ -1759,22 +1760,14 @@ def parse_directory(
 
     Args:
         project_root: Absolute path to the repo root.
-        skip_dirs: Directory names to skip (merged with defaults).
+        skip_dirs: Directory names to skip (merged with defaults and .ccignore).
         progress: Show a tqdm progress bar while parsing.
         on_progress: Called as on_progress(files_done, files_total) after each
             file — for callers with no console (the MCP server).
     """
-    default_skip = {
-        ".git", "node_modules", "__pycache__", ".venv", "venv",
-        "dist", "build", ".mypy_cache", ".pytest_cache",
-        "coverage", "tmp", "cache", ".nx", "lcov-report",
-    }
-    ignored = (skip_dirs or set()) | default_skip
-
     # Collect all files first so tqdm can show a total
     source_files: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(project_root):
-        dirnames[:] = [d for d in dirnames if d not in ignored]
+    for dirpath, dirnames, filenames in ignore_walk(project_root, skip_dirs=skip_dirs):
         for filename in filenames:
             if Path(filename).suffix.lower() in SUPPORTED_EXTENSIONS:
                 source_files.append(os.path.join(dirpath, filename))

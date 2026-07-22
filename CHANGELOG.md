@@ -1,5 +1,29 @@
 # Changelog
 
+## [6.2.0] - 2026-07-22
+
+### Added
+- **`.ccignore` — per-repo exclusions.** Until now the only way to keep a
+  directory out of the graph was to be one of the fourteen hardcoded names
+  (`node_modules`, `dist`, `.venv`, …). Anything else got indexed: a mid-size
+  PHP repo spent 72k of its 96k entities on `vendor/`, inflating `graph.json`
+  to 258 MB and making every `ingest` re-embed ~96k strings — around twelve
+  minutes on a laptop CPU, nearly all of it Composer packages nobody will ever
+  query. A `.ccignore` at the repo root now takes gitignore-style globs, one
+  per line, `#` for comments. A pattern without a `/` matches any path
+  component (`vendor` kills every `vendor` directory at any depth); one with a
+  `/` is root-relative. No `!` negation. Honored by `ingest` and `watch` alike.
+
+### Fixed
+- **`watch` re-indexed files `ingest` had skipped.** The file watcher applied
+  no skip rules at all, so a `composer install` or `npm ci` under a directory
+  the parser deliberately ignored streamed straight back into the graph. It now
+  shares the ingest ignore rules.
+
+### Changed
+- The two copies of the skip-directory list (`code_parser`,
+  `hierarchy_builder`) are now one, in `ingestion/ignore.py`.
+
 ## [6.1.0] - 2026-07-22
 
 ### Changed

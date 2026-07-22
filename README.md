@@ -81,6 +81,26 @@ Indexing is an MCP operation, not a CLI one. Start the server in your project
 `ingest` tool to build the graph. Re-`ingest` after refactors, or run
 `codecompass watch` to keep the graph live.
 
+### Exclude paths — `.ccignore`
+
+`.git`, `node_modules`, `dist`, `build`, `.venv`, and friends are skipped
+already. For anything else — vendored dependencies, generated code, minified
+bundles — drop a `.ccignore` at the repo root:
+
+```
+vendor/            # any directory named vendor, at any depth
+api/generated/*    # anchored at the repo root
+*.min.js
+```
+
+Gitignore-style globs, one per line, `#` starts a comment. A pattern without a
+`/` matches any path component; one with a `/` is root-relative. No `!`
+negation. Applies to `ingest` and `watch` alike.
+
+Worth doing: a mid-size PHP repo whose `vendor/` is indexed spends ~72k of its
+96k entities on Composer packages you will never ask about — and every
+`ingest` re-embeds all of them.
+
 ### Connect an MCP client
 
 The server speaks stdio MCP and defaults to the working directory.

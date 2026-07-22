@@ -10,14 +10,8 @@ import os
 import uuid
 from pathlib import Path
 
+from ingestion.ignore import walk as ignore_walk
 from models.code_types import FileNode, FolderNode
-
-# Directory names skipped during traversal
-_SKIP_DIRS = {
-    ".git", "node_modules", "__pycache__", ".venv", "venv",
-    "dist", "build", ".mypy_cache", ".pytest_cache",
-    "coverage", "tmp", "cache", ".nx", "lcov-report",
-}
 
 # Supported source file extensions (mirrors code_parser.SUPPORTED_EXTENSIONS)
 _SOURCE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".html", ".css", ".scss", ".php"}
@@ -39,9 +33,7 @@ def build_hierarchy(project_root: str, project_name: str, client) -> dict[str, s
 
     file_id_map: dict[str, str] = {}
 
-    for dirpath, dirnames, filenames in os.walk(project_root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-
+    for dirpath, dirnames, filenames in ignore_walk(project_root):
         rel_dir = os.path.relpath(dirpath, project_root)
         is_root = rel_dir == "."
 

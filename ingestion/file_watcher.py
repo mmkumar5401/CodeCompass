@@ -21,6 +21,7 @@ from watchdog.observers import Observer
 
 from graph.code_graph_client import LocalGraphClient as CodeGraphClient
 from ingestion.code_parser import parse_file, SUPPORTED_EXTENSIONS
+from ingestion.ignore import DEFAULT_SKIP, is_ignored, load_patterns
 
 
 def pid_file_path(project_name: str) -> str:
@@ -47,6 +48,7 @@ class _CodeFileEventHandler(FileSystemEventHandler):
         self._project_name = project_name
         self._client = client
         self._file_id_map = file_id_map  # {rel_path: file_node_id}
+        self._ignore_patterns = load_patterns(project_root)
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if event.is_directory:
@@ -85,6 +87,8 @@ class _CodeFileEventHandler(FileSystemEventHandler):
             return
 
         rel_path = os.path.relpath(abs_path, self._project_root)
+        if self._is_ignored(rel_path):
+            return
         print(f"[file_watcher] changed: {rel_path}")
 
         # Delete stale entity nodes (File node stays — file still exists)
@@ -99,6 +103,12 @@ class _CodeFileEventHandler(FileSystemEventHandler):
             self._client.write_code_triple(triple, file_node_id, self._project_name)
 
         print(f"[file_watcher] wrote {len(new_triples)} triples for {rel_path}")
+
+    def _is_ignored(self, rel_path: str) -> bool:
+        """Skip churn in vendored/ignored trees — ingest never indexed them."""
+        parts = rel_path.replace(os.sep, "/").split("/")
+        return (any(p in DEFAULT_SKIP for p in parts[:-1])
+                or is_ignored(rel_path, self._ignore_patterns))
 
     def _remove_file_from_graph(self, rel_path: str) -> None:
         """Purge File node and all entity nodes for a deleted or moved file."""
