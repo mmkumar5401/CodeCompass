@@ -6,6 +6,16 @@ import json
 import pi_setup
 
 
+def test_skill_frontmatter_is_first():
+    """pi parses YAML frontmatter only when `---` is line 1 — anything above it
+    (like our generated-by marker) makes it report "description is required"."""
+    lines = pi_setup._SKILL_MD.splitlines()
+    assert lines[0] == "---"
+    assert any(line.startswith("description:") for line in lines[:5])
+    closing = lines.index("---", 1)
+    assert pi_setup._SKILL_MARKER in lines[closing + 1]  # marker sits in the body
+
+
 def _install(tmp_path, monkeypatch):
     """Point pi_setup at a temp home and pretend pi + adapter are installed."""
     skill_file = tmp_path / "SKILL.md"

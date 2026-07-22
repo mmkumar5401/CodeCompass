@@ -53,8 +53,10 @@ def _server_config() -> dict:
 # Shipped as the pi skill. pi has the MCP tools natively via pi-mcp-adapter;
 # this teaches the orient-first discipline and lists the capabilities.
 #
-# The marker below is what makes the skill self-updating: init-style, we only
+# The marker is what makes the skill self-updating: init-style, we only
 # overwrite files we wrote. Strip the line to take ownership of your copy.
+# It goes in the BODY, never above the frontmatter — pi requires the opening
+# `---` on line 1 and reports "description is required" for anything else.
 _SKILL_MARKER = "<!-- Installed by `codecompass setup-pi` — rewritten on upgrade. -->"
 
 # Copies installed before the marker existed. A file carrying one of these is
@@ -64,11 +66,12 @@ _LEGACY_SIGNATURES = (
     "CodeCompass maps a repo into a queryable graph",
 )
 
-_SKILL_MD = _SKILL_MARKER + """
+_SKILL_MD = """\
 ---
 name: codecompass
 description: Orient in any indexed repo through the CodeCompass code graph before reading files. Use for discovery, impact/dependency traces, dead-code checks, and flow analysis in any repository with a .codecompass/graph.json index.
 ---
+""" + _SKILL_MARKER + """
 
 # CodeCompass
 

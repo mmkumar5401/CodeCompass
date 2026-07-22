@@ -1,5 +1,14 @@
 # Changelog
 
+## [6.0.2] - 2026-07-22
+
+### Fixed
+- **pi rejected the skill file with "description is required".** The
+  generated-by marker added in 6.0.0 was written above the YAML frontmatter, so
+  the opening `---` was no longer line 1 and pi parsed no frontmatter at all.
+  The marker now sits in the body, directly after the closing delimiter, where
+  it still drives the self-update check.
+
 ## [6.0.1] - 2026-07-22
 
 ### Fixed
