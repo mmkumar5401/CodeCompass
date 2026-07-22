@@ -1753,6 +1753,7 @@ def parse_directory(
     project_root: str,
     skip_dirs: set[str] | None = None,
     progress: bool = False,
+    on_progress=None,
 ) -> list[CodeTriple]:
     """Recursively parse all supported files under project_root.
 
@@ -1760,6 +1761,8 @@ def parse_directory(
         project_root: Absolute path to the repo root.
         skip_dirs: Directory names to skip (merged with defaults).
         progress: Show a tqdm progress bar while parsing.
+        on_progress: Called as on_progress(files_done, files_total) after each
+            file — for callers with no console (the MCP server).
     """
     default_skip = {
         ".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -1779,8 +1782,10 @@ def parse_directory(
     source_files_iter = track(source_files, description="Parsing files") if progress else source_files
 
     triples: list[CodeTriple] = []
-    for full_path in source_files_iter:
+    for done, full_path in enumerate(source_files_iter, 1):
         triples.extend(parse_file(full_path, project_root))
+        if on_progress:
+            on_progress(done, len(source_files))
 
     return triples
 

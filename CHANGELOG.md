@@ -1,5 +1,35 @@
 # Changelog
 
+## [5.2.0] - 2026-07-22
+
+### Added
+- **`ingest` streams progress.** The MCP tool now runs the blocking ingest in a
+  worker thread and reports 0-100% progress notifications as it works
+  (hierarchy → per-file parsing → normalize → graph write → vector index).
+  `ingest_code(..., on_progress=)` and `parse_directory(..., on_progress=)`
+  expose the same callback to non-console callers; the CLI progress bar is
+  unchanged.
+- **`add_call(..., relation=)`** records `IMPORTS` and `INHERITS` edges, not
+  just `CALLS`. Structural edges (`CONTAINS`/`DEFINED_IN`) stay parser-owned
+  and are refused. `IMPORTS` may target a stdlib or third-party module — the
+  file-less module node is created when the graph has never seen it, and
+  survives re-ingest. Ambiguous names are still skipped, never guessed.
+
+### Changed
+- **Guard hooks block git's own search and dump commands** — `git grep`,
+  `git ls-files`, `git cat-file`, and `git log -S/-G` (Claude hook and pi
+  extension). `git log`, `status`, `show`, and `diff` stay allowed.
+- **Every graph read result carries a `next` reminder** to record missed
+  entities and calls with `add_entity`/`add_call`, and the AGENTS.md template
+  makes that write-back a standing rule rather than an option.
+
+## [5.1.0] - 2026-07-21
+
+### Added
+- **Semantic vector search over entities** — new `search` MCP tool backed by
+  `.codecompass/vectors.lance` (LanceDB + fastembed), rebuilt on every ingest.
+  Optional: `pip install 'codecompass-mcp[search]'`.
+
 ## [5.0.0] - 2026-07-22
 
 ### Removed

@@ -15,10 +15,13 @@ agent says "use this repo" or "cd to this repo" to point it elsewhere.
 
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 
-from fastmcp import FastMCP
+import anyio.from_thread
+import anyio.to_thread
+from fastmcp import Context, FastMCP
 
 from graph.code_queries import (
     DEFAULT_HOPS,
@@ -95,11 +98,25 @@ def _active_repo() -> str:
     return _REPO_PATH
 
 
+# Attached to every read result: exploring is when the agent learns what the
+# parser missed, so the reminder to write it back rides along with the answer.
+_RECORD_NUDGE = (
+    "Before moving on: anything you read that the graph is missing or "
+    "describes badly — record it now. add_entity(name, kind, file, line, "
+    "description) for entities, add_call(caller, callee, line) for calls. "
+    "Ambiguous entries are skipped, not guessed; agent-recorded data survives "
+    "re-ingest."
+)
+
+
 def _tool(fetch_fn, *args, **kwargs):
     """Resolve the active repo, ensure it is initialized, and call a fetch helper."""
     repo = _active_repo()
     _ensure_initialized(repo)
-    return fetch_fn(*args, repo, os.path.basename(repo), **kwargs)
+    result = fetch_fn(*args, repo, os.path.basename(repo), **kwargs)
+    if isinstance(result, dict):
+        result.setdefault("next", _RECORD_NUDGE)
+    return result
 
 
 @mcp.tool()
@@ -178,7 +195,10 @@ def search(query: str, limit: int = 10) -> dict:
     repo = _active_repo()
     _ensure_initialized(repo)
     from graph.vector_store import search_entities
-    return search_entities(repo, query, limit=limit)
+    result = search_entities(repo, query, limit=limit)
+    if isinstance(result, dict):
+        result.setdefault("next", _RECORD_NUDGE)
+    return result
 
 
 @mcp.tool()
@@ -247,7 +267,8 @@ def init() -> dict:
 
 
 @mcp.tool()
-def ingest(normalize: bool = False, dump_triples: str | None = None) -> dict:
+async def ingest(ctx: Context, normalize: bool = False,
+                 dump_triples: str | None = None) -> dict:
     """Re-index the currently configured repo and rebuild the code knowledge graph.
 
     normalize: normalize entity names via Haiku (slower, needs an API key).
@@ -255,7 +276,15 @@ def ingest(normalize: bool = False, dump_triples: str | None = None) -> dict:
     loading them into the graph (debugging the parser)."""
     repo = _active_repo()
     _ensure_initialized(repo)
-    ingest_code(repo, normalize=normalize, dump_triples=dump_triples)
+
+    # ingest_code is blocking, so it runs in a worker thread; progress hops back
+    # to the event loop from there so notifications flush while it works.
+    def on_progress(pct: int, message: str) -> None:
+        anyio.from_thread.run(ctx.report_progress, pct, 100, message)
+
+    await anyio.to_thread.run_sync(
+        functools.partial(ingest_code, repo, normalize=normalize,
+                          dump_triples=dump_triples, on_progress=on_progress))
     return {"status": "ok", "repo": repo, "project": os.path.basename(repo),
             "normalize": normalize, "dump_triples": dump_triples,
             "next": "Record anything the parser missed while you were reading "
@@ -302,16 +331,24 @@ def add_entity(name: str, kind: str = "function", file: str = "",
 
 
 @mcp.tool()
-def add_call(caller: str, callee: str, line: int | None = None) -> dict:
-    """Record a CALLS edge you spotted in source that the parser missed
-    (dynamic dispatch, callbacks, string-based lookup). Both names must
+def add_call(caller: str, callee: str, line: int | None = None,
+             relation: str = "CALLS") -> dict:
+    """Record an edge you spotted in source that the parser missed — a call via
+    dynamic dispatch, a callback, string-based lookup, a conditional import, a
+    runtime-registered base class.
+
+    relation is CALLS (default), IMPORTS, or INHERITS. Structural edges
+    (CONTAINS/DEFINED_IN) are parser-owned and cannot be added. Both names must
     resolve unambiguously — ambiguous targets are skipped, never guessed.
-    Idempotent: existing edges are left alone.
+    IMPORTS may target a stdlib or third-party module (`add_call("main",
+    "pathlib", relation="IMPORTS")`); the module node is created if the graph
+    has never seen it. Idempotent: existing edges of the same type are left
+    alone.
     """
     repo = _active_repo()
     _ensure_initialized(repo)
     from ingestion.enricher import add_call as _add
-    return _add(repo, caller, callee, line=line)
+    return _add(repo, caller, callee, line=line, relation=relation)
 
 
 def main() -> None:

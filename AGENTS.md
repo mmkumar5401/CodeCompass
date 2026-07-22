@@ -126,14 +126,26 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 - After major refactors (moved functions, renamed classes)
 - If query results look stale or incomplete
 
-### The graph improves with use — record what it missed
+### The graph improves with use — record what it missed (NOT optional)
 
-While reading code you may find entities, calls, or important variables the
-parser didn't capture. Record them immediately with the MCP tools
-`add_entity(name, kind, file, line, description)` and
-`add_call(caller, callee, line)`. Both mark entries `agent_inferred` and skip
-anything ambiguous rather than guess. Small opportunistic writes keep the
-graph accurate between full `enrich` runs.
+Exploring the code is how you find what the parser missed, so write it back as
+you go — every session, not only when asked:
+
+- Read a function/class/constant the graph doesn't have (or `grep`/`search`
+  found nothing for) → `add_entity(name, kind, file, line, description)`.
+- Read a call the graph doesn't show — dynamic dispatch, a callback, a handler
+  wired up at runtime → `add_call(caller, callee, line)`. Same tool for a
+  missed import or base class: `add_call(a, b, relation="IMPORTS")` /
+  `relation="INHERITS"`. IMPORTS targets may be stdlib or third-party
+  modules (`add_call("main", "pathlib", relation="IMPORTS")`).
+- Worked out what an entity actually does → `add_entity` again with the real
+  one-line description; it overwrites the placeholder.
+
+Record it in the same turn you learned it, before you answer the user — a fact
+you postpone is a fact the next session re-derives. Both tools mark entries
+`agent_inferred` and skip anything ambiguous rather than guess, so a wrong
+guess costs nothing but a `skipped` status. Small opportunistic writes keep
+the graph accurate between full `enrich` runs.
 
 ### Enrichment — user-triggered ONLY
 

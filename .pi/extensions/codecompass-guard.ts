@@ -7,10 +7,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // Word-boundary match anywhere in the command: catches `grep foo`,
 // `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
 // (?![\w-]) avoids false positives like `git cat-file`.
-const BLOCKED_SHELL_RE = /\b(?:grep|rg|cat)\b(?![\w-])/;
+// git's own search/dump is blocked too: `git grep`, `git log -S/-G`, `git ls-files`, `git cat-file`.
+const BLOCKED_SHELL_RE =
+  /\b(?:grep|rg|cat)\b(?![\w-])|\bgit\b[^|;&]*?\s(?:grep|ls-files|cat-file)\b|\bgit\b[^|;&]*?\slog\b[^|;&]*?\s-[SG]/;
 
 const REASON =
-  "Don't grep/cat/rg the repo. Discover through the codecompass MCP tools — " +
+  "Don't grep/cat/rg (or `git grep`) the repo. Discover through the codecompass MCP tools — " +
   "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — " +
   "then read the specific slice with the Read tool (or sed -n/head/tail), " +
   "not a whole-file dump.";

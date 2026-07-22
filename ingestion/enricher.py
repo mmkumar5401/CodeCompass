@@ -180,19 +180,28 @@ def prepare_enrich_batches(
     return result
 
 
-def _resolve_callee(client, project: str, name: str) -> str | None:
-    """Node id of the single in-project entity called `name`, else None.
+def _resolve_callee(client, project: str, name: str,
+                    allow_external: bool = False) -> str | None:
+    """Node id of the single entity called `name`, else None.
+
+    In-project entities (those with a file) only, unless allow_external — the
+    parser also emits file-less nodes for imported stdlib/third-party modules,
+    and an IMPORTS target may legitimately be one of those.
 
     Ambiguous names (multiple definitions) are never guessed — the parser's
     whole unresolved-receiver problem lives here, and a wrong edge is worse
     than a missing one.
     """
-    matches = [
+    matches = _match_ids(client, project, name, allow_external)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _match_ids(client, project: str, name: str, allow_external: bool = False) -> list:
+    return [
         nid for nid, a in client.graph.nodes(data=True)
         if a.get("type") == "Entity" and a.get("project") == project
-        and a.get("file") and a.get("name") == name
+        and (a.get("file") or allow_external) and a.get("name") == name
     ]
-    return matches[0] if len(matches) == 1 else None
 
 
 def add_entity(repo_path: str, name: str, kind: str = "function",
@@ -247,30 +256,55 @@ def add_entity(repo_path: str, name: str, kind: str = "function",
         client.close()
 
 
+# Edge types an agent may record. CONTAINS/DEFINED_IN are structural — the
+# parser owns the hierarchy and a guessed one corrupts it.
+AGENT_RELATIONS = ("CALLS", "IMPORTS", "INHERITS")
+
+
 def add_call(repo_path: str, caller: str, callee: str,
-             line: int | None = None) -> dict[str, str]:
-    """Record a CALLS edge the agent spotted in source but the parser missed.
-    Both ends must resolve unambiguously — ambiguous names are skipped, never
-    guessed. Idempotent: an existing CALLS edge is left alone."""
+             line: int | None = None, relation: str = "CALLS") -> dict[str, str]:
+    """Record an edge the agent spotted in source but the parser missed.
+    relation is one of AGENT_RELATIONS (CALLS by default). Both ends must
+    resolve unambiguously — ambiguous names are skipped, never guessed.
+    Idempotent: an existing edge of the same type is left alone."""
+    relation = relation.upper()
+    if relation not in AGENT_RELATIONS:
+        return {"status": "skipped",
+                "reason": f"relation {relation!r} not one of {', '.join(AGENT_RELATIONS)}"}
     repo_path = os.path.abspath(repo_path)
     project = os.path.basename(repo_path)
     client = get_client(repo_path)
     try:
+        imports = relation == "IMPORTS"
         from_id = _resolve_callee(client, project, caller)
-        to_id = _resolve_callee(client, project, callee)
+        # An import target may be a stdlib/third-party module, which lives in
+        # the graph as a file-less node — or not at all, the first time anyone
+        # records it.
+        to_id = _resolve_callee(client, project, callee, allow_external=imports)
         if from_id is None:
             return {"status": "skipped", "reason": f"caller {caller!r} not found or ambiguous"}
+        # Only when nothing of that name exists — an ambiguous name still skips.
+        if (to_id is None and imports
+                and not _match_ids(client, project, callee, allow_external=True)):
+            to_id = f"{project}:{callee}"
+            language = client.graph.nodes[from_id].get("language", "")
+            client.graph.add_node(
+                to_id, type="Entity", name=callee, project=project,
+                entity_type="module", kind=f"module:{language}" if language else "module",
+                language=language, description=f"{language} module".strip(),
+                agent_inferred=True, agent_created=True,
+            )
         if to_id is None:
             return {"status": "skipped", "reason": f"callee {callee!r} not found or ambiguous"}
         already = any(
-            e.get("type") == "CALLS"
+            e.get("type") == relation
             for e in client.graph.get_edge_data(from_id, to_id, default={}).values()
         )
         if already:
             return {"status": "exists", "from": from_id, "to": to_id}
         client.graph.add_edge(
             from_id, to_id,
-            type="CALLS",
+            type=relation,
             source_file=client.graph.nodes[from_id].get("file", ""),
             line=line,
             resolved=False,

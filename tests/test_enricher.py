@@ -109,12 +109,38 @@ def test_add_entity_and_add_call(tmp_path):
     assert add_call(str(repo_path), "caller", "shared")["status"] == "skipped"
     assert add_call(str(repo_path), "ghost", "callee")["status"] == "skipped"
 
+    # Non-CALLS relations ride the same tool; CALLS on the same pair already
+    # exists, so a distinct type must still be added.
+    assert add_call(str(repo_path), "caller", "callee",
+                    relation="imports")["status"] == "added"
+    assert add_call(str(repo_path), "caller", "callee",
+                    relation="IMPORTS")["status"] == "exists"
+    # Structural edges stay parser-owned
+    assert add_call(str(repo_path), "caller", "callee",
+                    relation="CONTAINS")["status"] == "skipped"
+
+    # IMPORTS of a module the graph has never seen creates the external node;
+    # a CALLS to the same unknown name still skips (only imports go external).
+    assert add_call(str(repo_path), "caller", "pathlib",
+                    relation="IMPORTS")["status"] == "added"
+    assert add_call(str(repo_path), "caller", "pathlib")["status"] == "skipped"
+    # Ambiguity still wins over node creation
+    assert add_call(str(repo_path), "caller", "shared",
+                    relation="IMPORTS")["status"] == "skipped"
+
     client = get_client(str(repo_path))
     node = next(a for _, a in client.graph.nodes(data=True) if a.get("name") == "helper")
     assert node["description"] == "Async helper." and node["agent_inferred"] is True
     edge = next(e for e in client.graph.get_edge_data(
         f"{project}:caller", f"{project}:callee").values() if e.get("type") == "CALLS")
     assert edge["agent_inferred"] is True
+    imports = next(e for e in client.graph.get_edge_data(
+        f"{project}:caller", f"{project}:callee").values() if e.get("type") == "IMPORTS")
+    assert imports["agent_inferred"] is True
+    # The stdlib module node the agent created: file-less, like the parser's own
+    stdlib = client.graph.nodes[f"{project}:pathlib"]
+    assert stdlib["kind"] == "module:python" and not stdlib.get("file")
+    assert stdlib["agent_created"] is True
     client.close()
 
 
@@ -136,6 +162,8 @@ def test_agent_data_survives_reingest(tmp_path):
 
     add_entity(str(repo_path), "helper", file="src/a.py", description="Async helper.")
     assert add_call(str(repo_path), "caller", "target", line=2)["status"] == "added"
+    assert add_call(str(repo_path), "caller", "pathlib",
+                    relation="IMPORTS")["status"] == "added"
 
     cc_main.ingest_code(str(repo_path))  # full rebuild
 
@@ -147,4 +175,8 @@ def test_agent_data_survives_reingest(tmp_path):
     assert len(agent_edges) == 1
     names = {client.graph.nodes[n].get("name") for n in agent_edges[0]}
     assert names == {"caller", "target"}
+    # The file-less stdlib node and its IMPORTS edge survive too
+    assert client.graph.nodes[f"{project}:pathlib"]["agent_created"] is True
+    assert any(e.get("type") == "IMPORTS" and e.get("agent_inferred")
+               for _, _, e in client.graph.edges(data=True))
     client.close()

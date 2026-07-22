@@ -18,8 +18,14 @@ _REGISTRY = os.environ.get(
 _BLOCKED_TOOLS = {"Grep", "Glob"}
 # Word-boundary match anywhere in the command: catches `grep foo`,
 # `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
-# (?![\w-]) avoids false positives like `git cat-file`.
-_BLOCKED_SHELL_RE = re.compile(r"\b(?:grep|rg|cat)\b(?![\w-])")
+# (?![\w-]) keeps the bare-`cat` rule off hyphenated names; git's own
+# subcommands are matched by the `\bgit\b ...` alternatives below.
+_BLOCKED_SHELL_RE = re.compile(
+    r"\b(?:grep|rg|cat)\b(?![\w-])"
+    # git's own search/dump: `git grep`, `git log -S/-G`, `git ls-files`, `git cat-file`
+    r"|\bgit\b[^|;&]*?\s(?:grep|ls-files|cat-file)\b"
+    r"|\bgit\b[^|;&]*?\slog\b[^|;&]*?\s-[SG]"
+)
 
 
 def _repos() -> list:
@@ -85,11 +91,11 @@ def main() -> None:
                 saw_path = True
                 repo = _repo_containing(p)
                 if repo:
-                    _block("grep/rg/cat")
+                    _block("grep/rg/cat/git grep")
             if not saw_path:  # unparseable — decide by where the agent stands
                 repo = _repo_containing(os.path.realpath(cwd))
                 if repo:
-                    _block("grep/rg/cat")
+                    _block("grep/rg/cat/git grep")
             # every named path is outside all codecompass repos — allow
 
     sys.exit(0)

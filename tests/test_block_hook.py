@@ -56,11 +56,20 @@ def test_hook_blocks_inside_repo_allows_outside(tmp_path):
                     "cwd": str(repo)}, env)
     assert r.returncode == 2
 
-    # git cat-file is not a search -> allowed
-    r = _run(hook, {"tool_name": "Bash",
-                    "tool_input": {"command": "git cat-file -p HEAD"},
-                    "cwd": str(repo)}, env)
-    assert r.returncode == 0
+    # git's other content searches -> blocked
+    for cmd in ("git ls-files", "git log -S needle", "git -C . grep foo",
+                "git cat-file -p HEAD"):
+        r = _run(hook, {"tool_name": "Bash",
+                        "tool_input": {"command": cmd},
+                        "cwd": str(repo)}, env)
+        assert r.returncode == 2, cmd
+
+    # ordinary git history/read commands -> allowed
+    for cmd in ("git log --oneline", "git status", "git show HEAD"):
+        r = _run(hook, {"tool_name": "Bash",
+                        "tool_input": {"command": cmd},
+                        "cwd": str(repo)}, env)
+        assert r.returncode == 0, cmd
 
     # Grep tool defaulting to cwd (inside the repo) -> blocked
     r = _run(hook, {"tool_name": "Grep",

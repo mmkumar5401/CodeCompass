@@ -195,8 +195,14 @@ _REGISTRY = os.environ.get(
 _BLOCKED_TOOLS = {"Grep", "Glob"}
 # Word-boundary match anywhere in the command: catches `grep foo`,
 # `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
-# (?![\w-]) avoids false positives like `git cat-file`.
-_BLOCKED_SHELL_RE = re.compile(r"\b(?:grep|rg|cat)\b(?![\w-])")
+# (?![\w-]) keeps the bare-`cat` rule off hyphenated names; git's own
+# subcommands are matched by the `\bgit\b ...` alternatives below.
+_BLOCKED_SHELL_RE = re.compile(
+    r"\b(?:grep|rg|cat)\b(?![\w-])"
+    # git's own search/dump: `git grep`, `git log -S/-G`, `git ls-files`, `git cat-file`
+    r"|\bgit\b[^|;&]*?\s(?:grep|ls-files|cat-file)\b"
+    r"|\bgit\b[^|;&]*?\slog\b[^|;&]*?\s-[SG]"
+)
 
 
 def _repos() -> list:
@@ -262,11 +268,11 @@ def main() -> None:
                 saw_path = True
                 repo = _repo_containing(p)
                 if repo:
-                    _block("grep/rg/cat")
+                    _block("grep/rg/cat/git grep")
             if not saw_path:  # unparseable — decide by where the agent stands
                 repo = _repo_containing(os.path.realpath(cwd))
                 if repo:
-                    _block("grep/rg/cat")
+                    _block("grep/rg/cat/git grep")
             # every named path is outside all codecompass repos — allow
 
     sys.exit(0)
@@ -375,10 +381,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 // Word-boundary match anywhere in the command: catches `grep foo`,
 // `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
 // (?![\w-]) avoids false positives like `git cat-file`.
-const BLOCKED_SHELL_RE = /\b(?:grep|rg|cat)\b(?![\w-])/;
+// git's own search/dump is blocked too: `git grep`, `git log -S/-G`, `git ls-files`, `git cat-file`.
+const BLOCKED_SHELL_RE =
+  /\b(?:grep|rg|cat)\b(?![\w-])|\bgit\b[^|;&]*?\s(?:grep|ls-files|cat-file)\b|\bgit\b[^|;&]*?\slog\b[^|;&]*?\s-[SG]/;
 
 const REASON =
-  "Don't grep/cat/rg the repo. Discover through the codecompass MCP tools — " +
+  "Don't grep/cat/rg (or `git grep`) the repo. Discover through the codecompass MCP tools — " +
   "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — " +
   "then read the specific slice with the Read tool (or sed -n/head/tail), " +
   "not a whole-file dump.";
@@ -437,15 +445,23 @@ def _ensure_pi_agents_md(repo_path: str) -> None:
         )
 
 
-def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None) -> None:
+def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None,
+                on_progress=None) -> None:
     """Ingest a codebase into the local code knowledge graph.
 
     Phase 1: Walk the repo and write the Project → Folder → File skeleton.
     Phase 2: Parse every source file with tree-sitter into CodeTriples.
     Phase 3: Normalize entity names via Haiku (only if --normalize is passed).
     Phase 4: Write all triples to the local graph.json.
+
+    on_progress: called as on_progress(percent, message) — for callers with no
+    console (the MCP server). Percent is 0-100 across all phases.
     """
     import json
+
+    def _report(pct: int, message: str) -> None:
+        if on_progress:
+            on_progress(pct, message)
 
     repo_path = os.path.abspath(repo_path)
     project_name = os.path.basename(repo_path)
@@ -474,11 +490,24 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     client.graph.clear()
 
     console.print("[dim]Phase 1/4 — Building hierarchy…[/]")
+    _report(2, "Building hierarchy…")
     file_id_map = build_hierarchy(repo_path, project_name, client)
     console.print(f"[dim]  {len(file_id_map)} source files indexed[/]")
 
     console.print("[dim]Phase 2/4 — Parsing source files…[/]")
-    raw_triples = parse_directory(repo_path, progress=True)
+    # Parsing dominates the wall clock, so it owns 5-70% of the bar.
+    _report(5, f"Parsing {len(file_id_map)} source files…")
+    last_pct = 5
+
+    def _parsed(done: int, total: int) -> None:
+        nonlocal last_pct
+        pct = 5 + int(65 * done / max(total, 1))
+        if pct > last_pct:  # one notification per percent, not per file
+            last_pct = pct
+            _report(pct, f"Parsing files ({done}/{total})…")
+
+    raw_triples = parse_directory(repo_path, progress=True,
+                                  on_progress=_parsed if on_progress else None)
     console.print(f"[dim]  {len(raw_triples)} raw triples extracted[/]")
 
     if not raw_triples:
@@ -508,6 +537,7 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     if normalize:
         from ingestion.code_normalizer import normalize_triples
         console.print("[dim]Phase 3/4 — Normalizing triples via Haiku…[/]")
+        _report(72, "Normalizing triples via Haiku…")
         triples = normalize_triples(raw_triples, progress=True)
         console.print(f"[dim]  {len(triples)} triples after normalization[/]")
     else:
@@ -515,6 +545,7 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
         triples = raw_triples
 
     console.print("[dim]Phase 4/4 — Writing to local graph…[/]")
+    _report(85, f"Writing {len(triples)} triples to the graph…")
     written = client.write_code_triples_batch(triples, file_id_map, project_name)
 
     # Restore agent-authored data onto the new graph.
@@ -542,11 +573,13 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     # plus restored agent-inferred ones). Wipes and rewrites like the graph.
     try:
         from graph.vector_store import index_entities
+        _report(95, "Rebuilding vector index…")
         n = index_entities(repo_path)
         console.print(f"[dim]Phase 5/5 — Vector index rebuilt ({n} entities embedded)[/]")
     except Exception as exc:
         console.print(f"[dim]Phase 5/5 — Vector index skipped ({exc})[/]")
 
+    _report(100, f"Done — {written} triples, {total_nodes} nodes.")
     console.print(
         f"[bold green]Done.[/] Wrote {written} triples. "
         f"Graph now has {total_nodes} nodes."
@@ -689,14 +722,26 @@ doc → `memory.md`; code-comment warning to the next person → `learnings.md`.
 - After major refactors (moved functions, renamed classes)
 - If query results look stale or incomplete
 
-### The graph improves with use — record what it missed
+### The graph improves with use — record what it missed (NOT optional)
 
-While reading code you may find entities, calls, or important variables the
-parser didn't capture. Record them immediately with the MCP tools
-`add_entity(name, kind, file, line, description)` and
-`add_call(caller, callee, line)`. Both mark entries `agent_inferred` and skip
-anything ambiguous rather than guess. Small opportunistic writes keep the
-graph accurate between full `enrich` runs.
+Exploring the code is how you find what the parser missed, so write it back as
+you go — every session, not only when asked:
+
+- Read a function/class/constant the graph doesn't have (or `grep`/`search`
+  found nothing for) → `add_entity(name, kind, file, line, description)`.
+- Read a call the graph doesn't show — dynamic dispatch, a callback, a handler
+  wired up at runtime → `add_call(caller, callee, line)`. Same tool for a
+  missed import or base class: `add_call(a, b, relation="IMPORTS")` /
+  `relation="INHERITS"`. IMPORTS targets may be stdlib or third-party
+  modules (`add_call("main", "pathlib", relation="IMPORTS")`).
+- Worked out what an entity actually does → `add_entity` again with the real
+  one-line description; it overwrites the placeholder.
+
+Record it in the same turn you learned it, before you answer the user — a fact
+you postpone is a fact the next session re-derives. Both tools mark entries
+`agent_inferred` and skip anything ambiguous rather than guess, so a wrong
+guess costs nothing but a `skipped` status. Small opportunistic writes keep
+the graph accurate between full `enrich` runs.
 
 ### Enrichment — user-triggered ONLY
 
