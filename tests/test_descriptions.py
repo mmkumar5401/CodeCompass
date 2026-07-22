@@ -42,7 +42,8 @@ def _init(tmp_path, monkeypatch, source):
     repo.mkdir()
     (repo / "a.py").write_text(source)
     monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
-    monkeypatch.setattr("shutil.which", lambda _: None)  # skip pi/claude extras
+    monkeypatch.setattr("shutil.which", lambda _: None)  # skip claude extras
+    monkeypatch.setattr("main._pi_installed", lambda: False)  # and pi's
     init_project(str(repo))
     ingest_code(str(repo))
     return repo

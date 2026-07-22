@@ -123,7 +123,10 @@ point it at another repo.
 
 
 def _pi_available() -> bool:
-    return shutil.which("pi") is not None
+    """pi is on this machine. PATH alone lies: when pi spawns the MCP server it
+    usually doesn't pass its own bin directory down, so `which` finds nothing in
+    the very process pi launched. Its home directory is the durable marker."""
+    return shutil.which("pi") is not None or (Path.home() / ".pi").is_dir()
 
 
 def _adapter_installed() -> bool:

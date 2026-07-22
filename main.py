@@ -407,12 +407,24 @@ export default function (pi: ExtensionAPI) {
 '''
 
 
+def _pi_installed() -> bool:
+    """True if pi is on this machine — PATH is not a reliable signal.
+
+    When pi spawns the MCP server it usually doesn't pass its own bin directory
+    down (node lives under nvm), so `which("pi")` returns None inside the very
+    process pi asked to run `init`, and the repo silently gets no .pi/ files.
+    pi's home directory is the durable marker, so fall back to that.
+    """
+    return (shutil.which("pi") is not None
+            or os.path.isdir(os.path.join(os.path.expanduser("~"), ".pi")))
+
+
 def _ensure_pi_extension(repo_path: str) -> None:
     """Drop the pi guard extension into <repo>/.pi/extensions/ so pi blocks
     grep/cat/rg the same way the Claude hook does. No-op when pi is not
     installed. Rewrites copies init previously installed so old versions
     auto-update; leaves user-authored extensions alone."""
-    if shutil.which("pi") is None:
+    if not _pi_installed():
         return
     ext_dir = os.path.join(repo_path, ".pi", "extensions")
     ext_path = os.path.join(ext_dir, "codecompass-guard.ts")
@@ -427,7 +439,7 @@ def _ensure_pi_agents_md(repo_path: str) -> None:
     """Drop .pi/agent/AGENTS.md pointing at the root AGENTS.md so pi picks up
     the CodeCompass instructions. No-op when pi is not installed. Rewrites
     copies init previously installed so old versions auto-update."""
-    if shutil.which("pi") is None:
+    if not _pi_installed():
         return
     agents_path = os.path.join(repo_path, ".pi", "agent", "AGENTS.md")
     if os.path.exists(agents_path):

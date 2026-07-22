@@ -44,3 +44,32 @@ def test_init_refreshes_generated_keeps_user_and_graph(tmp_path, monkeypatch):
     assert user_ext.read_text() == "// mine\n"
     assert overview.read_text() == "# my notes\n"
     assert graph.read_text() == '{"sentinel": true}\n'
+
+
+def test_pi_files_land_even_when_pi_is_not_on_path(tmp_path, monkeypatch):
+    """pi spawning the MCP server doesn't pass its own bin dir down, so `which`
+    finds nothing in the process pi asked to run init. ~/.pi is the real signal."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    home = tmp_path / "home"
+    (home / ".pi").mkdir(parents=True)
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("shutil.which", lambda _: None)  # pi is installed, just not visible
+
+    init_project(str(repo))
+
+    assert (repo / ".pi" / "extensions" / "codecompass-guard.ts").exists()
+    assert (repo / ".pi" / "agent" / "AGENTS.md").exists()
+
+
+def test_no_pi_no_pi_files(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # no ~/.pi
+    monkeypatch.setattr("shutil.which", lambda _: None)
+
+    init_project(str(repo))
+
+    assert not (repo / ".pi").exists()

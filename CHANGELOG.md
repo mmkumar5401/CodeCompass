@@ -1,5 +1,17 @@
 # Changelog
 
+## [6.0.3] - 2026-07-22
+
+### Fixed
+- **`init` run from pi wrote no `.pi/` files.** Both the guard extension
+  (`.pi/extensions/codecompass-guard.ts`) and `.pi/agent/AGENTS.md` were gated
+  on `shutil.which("pi")` — but pi doesn't pass its own bin directory to the
+  MCP server it spawns (node lives under nvm), so pi looked uninstalled inside
+  the very process it asked to run `init`, and the repo silently got neither
+  file. The same blind spot skipped skill/mcp.json setup in `pi_setup`.
+  Detection now falls back to `~/.pi`, which is there regardless of `PATH`;
+  machines without pi still get no `.pi/` directory.
+
 ## [6.0.2] - 2026-07-22
 
 ### Fixed
