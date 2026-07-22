@@ -21,7 +21,8 @@ def _install(tmp_path, monkeypatch):
     skill_file = tmp_path / "SKILL.md"
     monkeypatch.setattr(pi_setup, "_SKILL_DIR", tmp_path)
     monkeypatch.setattr(pi_setup, "_SKILL_FILE", skill_file)
-    monkeypatch.setattr(pi_setup, "_MCP_CONFIG", tmp_path / "mcp.json")
+    monkeypatch.setattr(pi_setup, "_PI_MCP_CONFIG", tmp_path / "mcp.json")
+    monkeypatch.setattr(pi_setup, "_ADAPTER_MCP_CONFIG", tmp_path / "adapter-mcp.json")
     monkeypatch.setattr(pi_setup, "_pi_available", lambda: True)
     monkeypatch.setattr(pi_setup, "_adapter_installed", lambda: True)
     return skill_file
@@ -74,16 +75,35 @@ def test_mcp_config_points_at_an_absolute_command(tmp_path, monkeypatch):
     entry = json.loads(config.read_text())["mcpServers"]["codecompass"]
     assert entry == {"command": str(script)}
 
-    # Other servers in the file are preserved, and a stale codecompass entry is
-    # corrected even when the skill file is already up to date.
+    # Other servers are preserved, a stale codecompass command is corrected even
+    # when the skill file is current, and options the user set on our own entry
+    # (directTools, env, args) survive — only `command` is ours.
     config.write_text(json.dumps({"mcpServers": {
         "other": {"command": "keep-me"},
-        "codecompass": {"command": "codecompass-mcp"},
+        "codecompass": {"command": "codecompass-mcp", "directTools": False},
     }}))
     pi_setup.setup_pi(quiet=True)
     servers = json.loads(config.read_text())["mcpServers"]
     assert servers["other"] == {"command": "keep-me"}
-    assert servers["codecompass"] == {"command": str(script)}
+    assert servers["codecompass"] == {"command": str(script), "directTools": False}
+
+
+def test_adapter_config_is_updated_only_when_it_exists(tmp_path, monkeypatch):
+    """pi reads ~/.pi/agent/mcp.json natively. The adapter's own config is a
+    second home worth keeping in sync, but not worth creating from nothing."""
+    _install(tmp_path, monkeypatch)
+    script = tmp_path / "codecompass-mcp"
+    script.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(pi_setup.sys, "executable", str(tmp_path / "python"))
+    adapter = tmp_path / "adapter-mcp.json"
+
+    pi_setup.setup_pi(quiet=True)
+    assert not adapter.exists()  # adapter not in use — nothing invented for it
+
+    adapter.write_text(json.dumps({"mcpServers": {"codecompass": {"command": "stale"}}}))
+    pi_setup.setup_pi(force=True, quiet=True)
+    entry = json.loads(adapter.read_text())["mcpServers"]["codecompass"]
+    assert entry == {"command": str(script)}
 
 
 def test_no_pi_no_write(tmp_path, monkeypatch):

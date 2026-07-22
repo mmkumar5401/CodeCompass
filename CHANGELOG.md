@@ -1,5 +1,26 @@
 # Changelog
 
+## [6.1.0] - 2026-07-22
+
+### Changed
+- **A project set up by an older codecompass now heals itself.** `init` only
+  ran when `.codecompass/` was missing, so a repo initialized once — years ago,
+  by any version — kept that directory forever and never received any generated
+  file a later release added: guard hooks, the `.pi/` extension, the current
+  AGENTS.md block. Queries kept working, so nothing looked broken. The server
+  now also re-runs `init` when AGENTS.md doesn't carry this version's block, and
+  `_register_project_agents_md` skips the write when the content is unchanged,
+  so up-to-date repos pay nothing.
+
+### Fixed
+- **The pi server entry went into a file pi doesn't read.** `setup_pi` wrote
+  only `~/.config/mcp/mcp.json`, which is the standalone `pi-mcp-adapter`'s
+  config; pi reads `~/.pi/agent/mcp.json` natively. Both are now updated (the
+  adapter's only if it already exists), and the merge touches just the
+  `command` key — other servers, and options like `directTools` on the
+  codecompass entry, are preserved. Invalid JSON is left alone rather than
+  overwritten.
+
 ## [6.0.3] - 2026-07-22
 
 ### Fixed

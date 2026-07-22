@@ -621,9 +621,9 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     _register_project_agents_md(repo_path)
 
 
-def _register_project_agents_md(repo_path: str) -> None:
-    """Write or update the Code graph section in the project's AGENTS.md."""
-    block = f"""{_CODECOMPASS_START}
+def _agents_block() -> str:
+    """The Code graph section this version installs into a project's AGENTS.md."""
+    return f"""{_CODECOMPASS_START}
 ## Code graph
 
 **{_CODECOMPASS_READ_INSTRUCTION}**
@@ -769,6 +769,25 @@ output, fixtures, confirming a generated file exists). For anything about code
 structure or relationships, use the graph.
 {_CODECOMPASS_END}"""
 
+
+def agents_md_is_current(repo_path: str) -> bool:
+    """True if the project's AGENTS.md already carries THIS version's block.
+
+    A repo initialized by an older codecompass keeps working — its .codecompass/
+    exists, so nothing re-runs init — and silently misses every generated file a
+    later version added. This is the cheap staleness check that lets the server
+    heal such a repo on first use.
+    """
+    try:
+        with open(os.path.join(repo_path, "AGENTS.md")) as f:
+            return _agents_block() in f.read()
+    except OSError:
+        return False
+
+
+def _register_project_agents_md(repo_path: str) -> None:
+    """Write or update the Code graph section in the project's AGENTS.md."""
+    block = _agents_block()
     agents_md_path = os.path.join(repo_path, "AGENTS.md")
 
     if os.path.exists(agents_md_path):
@@ -779,6 +798,8 @@ structure or relationships, use the graph.
             new_content = re.sub(pattern, block, content, flags=re.DOTALL)
         else:
             new_content = content.rstrip() + f"\n\n---\n\n{block}\n"
+        if new_content == content:
+            return  # already current — don't churn the file's mtime
     else:
         new_content = block + "\n"
 

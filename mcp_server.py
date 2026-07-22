@@ -37,7 +37,7 @@ from graph.code_queries import (
     fetch_trace,
     fetch_tree,
 )
-from main import init_project, ingest_code
+from main import agents_md_is_current, init_project, ingest_code
 
 
 def _default_repo_path() -> str:
@@ -84,8 +84,17 @@ def get_repo() -> dict:
 
 
 def _ensure_initialized(repo_path: str) -> None:
-    """Auto-init if .codecompass is missing, but do not auto-ingest."""
-    if not Path(repo_path).joinpath(".codecompass").exists():
+    """Auto-init if the project is uninitialized OR was set up by an older
+    codecompass, but never auto-ingest.
+
+    The presence of .codecompass/ alone is not enough: a repo initialized years
+    ago keeps that directory forever, so every later version's generated files
+    (guard hooks, .pi/ extension, the current AGENTS.md block) would never
+    appear. A stale AGENTS.md block is the signal to re-run init, which rewrites
+    every generated file it owns and leaves user-authored ones alone.
+    """
+    if (not Path(repo_path).joinpath(".codecompass").exists()
+            or not agents_md_is_current(repo_path)):
         init_project(repo_path)
 
 

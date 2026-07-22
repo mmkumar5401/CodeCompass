@@ -73,3 +73,31 @@ def test_no_pi_no_pi_files(tmp_path, monkeypatch):
     init_project(str(repo))
 
     assert not (repo / ".pi").exists()
+
+
+def test_stale_project_is_reinitialized_on_first_tool_call(tmp_path, monkeypatch):
+    """A repo set up by an older codecompass keeps its .codecompass/ forever, so
+    presence alone can't gate init — the AGENTS.md block is the version signal."""
+    import mcp_server
+    from main import agents_md_is_current
+
+    repo = tmp_path / "repo"
+    (repo / ".codecompass").mkdir(parents=True)
+    (repo / "AGENTS.md").write_text(
+        "<!-- codecompass-code-graph-start -->\n"
+        "## Code graph\n\nRun `codecompass query --blast-radius <file>`.\n"
+        "<!-- codecompass-code-graph-end -->\n")
+    home = tmp_path / "home"
+    (home / ".pi").mkdir(parents=True)
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("shutil.which", lambda _: None)
+
+    assert not agents_md_is_current(str(repo))
+
+    mcp_server._ensure_initialized(str(repo))
+
+    assert agents_md_is_current(str(repo))
+    assert "--blast-radius" not in (repo / "AGENTS.md").read_text()
+    assert (repo / ".pi" / "extensions" / "codecompass-guard.ts").exists()
+    assert (repo / ".claude" / "hooks" / "block-file-search.py").exists()

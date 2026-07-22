@@ -23,10 +23,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Where pi loads user-global skills and pi-mcp-adapter reads user-global servers.
+# Where pi loads user-global skills.
 _SKILL_DIR = Path.home() / ".pi" / "agent" / "skills" / "codecompass"
 _SKILL_FILE = _SKILL_DIR / "SKILL.md"
-_MCP_CONFIG = Path.home() / ".config" / "mcp" / "mcp.json"
+
+# Where the server entry goes. pi reads its own ~/.pi/agent/mcp.json natively;
+# ~/.config/mcp/mcp.json is only consulted by the standalone pi-mcp-adapter, so
+# writing there alone left codecompass invisible to pi.
+_PI_MCP_CONFIG = Path.home() / ".pi" / "agent" / "mcp.json"
+_ADAPTER_MCP_CONFIG = Path.home() / ".config" / "mcp" / "mcp.json"
 
 _ADAPTER_PKG = "npm:pi-mcp-adapter"
 _ADAPTER_NAME = "pi-mcp-adapter"
@@ -144,24 +149,40 @@ def _install_adapter() -> None:
     subprocess.run(["pi", "install", _ADAPTER_PKG], check=False, timeout=300)
 
 
-def _write_mcp_config() -> bool:
-    """Merge the codecompass server into the user-global mcp.json, preserving
-    others. Returns True if the file changed — a no-op when already correct, so
-    this is cheap enough to run on every invocation."""
+def _write_one_mcp_config(path: Path) -> bool:
+    """Point one mcp.json at our server, leaving everything else in it alone.
+
+    Only the `command` key is ours: other servers stay, and any options the user
+    added to the codecompass entry (`directTools`, env, args) are preserved.
+    Returns True if the file changed.
+    """
     config: dict = {}
-    if _MCP_CONFIG.exists():
+    if path.exists():
         try:
-            config = json.loads(_MCP_CONFIG.read_text())
+            config = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
-            config = {}
+            return False  # hand-edited into invalid JSON — don't clobber it
     servers = config.setdefault("mcpServers", {})
-    wanted = _server_config()
-    if servers.get("codecompass") == wanted:
+    entry = dict(servers.get("codecompass") or {})
+    if entry.get("command") == _server_command():
         return False
-    servers["codecompass"] = wanted
-    _MCP_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    _MCP_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
+    entry["command"] = _server_command()
+    servers["codecompass"] = entry
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2) + "\n")
     return True
+
+
+def _write_mcp_config() -> bool:
+    """Register the server everywhere pi might look for it.
+
+    pi's own config is authoritative; the adapter's is updated too, but only if
+    it already exists — no point creating a file for a tool that isn't in use.
+    """
+    changed = _write_one_mcp_config(_PI_MCP_CONFIG)
+    if _ADAPTER_MCP_CONFIG.exists():
+        changed = _write_one_mcp_config(_ADAPTER_MCP_CONFIG) or changed
+    return changed
 
 
 def _skill_is_current() -> bool:
@@ -198,7 +219,7 @@ def setup_pi(force: bool = False, quiet: bool = False) -> bool:
     # when codecompass is reinstalled into a different environment, and a stale
     # one leaves pi with a server it cannot spawn.
     if _write_mcp_config():
-        say(f"Pointed pi at {_server_command()} in {_MCP_CONFIG}")
+        say(f"Pointed pi at {_server_command()} in {_PI_MCP_CONFIG}")
 
     if _skill_is_current() and not force:
         return True
@@ -209,7 +230,7 @@ def setup_pi(force: bool = False, quiet: bool = False) -> bool:
 
     _SKILL_DIR.mkdir(parents=True, exist_ok=True)
     _SKILL_FILE.write_text(_SKILL_MD)
-    say(f"CodeCompass wired into pi: {_SKILL_FILE}, {_MCP_CONFIG}")
+    say(f"CodeCompass wired into pi: {_SKILL_FILE}, {_PI_MCP_CONFIG}")
     return True
 
 
