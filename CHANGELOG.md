@@ -1,5 +1,54 @@
 # Changelog
 
+## [6.0.0] - 2026-07-22
+
+### Removed
+- **The `enrich` tool and its CLI command are gone**, along with batch staging,
+  `.codecompass/enrich/`, and `apply_enrich_results`. Descriptions and
+  parser-invisible edges now come from one place: an agent writing what it
+  learned with `add_entity`/`add_call` as it reads. `ingestion/enricher.py` is
+  now `ingestion/agent_writes.py`, holding just those two tools.
+
+### Changed
+- **Ingest builds into `graph.json.copy` and swaps it in.** The rebuild no
+  longer clears the live graph in place, so an ingest that crashes or is killed
+  mid-parse leaves the previous graph fully intact; the swap itself is an
+  `os.replace`, so a concurrent reader sees the old graph or the new one, never
+  a truncated file. Once the new graph exists the old one is joined onto it by
+  node id: surviving nodes keep attributes the parser didn't set, `add_entity`
+  nodes and `add_call` edges are carried over, and anything the parser no
+  longer produces is dropped. The description sidecar is written once, at that
+  join, instead of on every intermediate save.
+- **Descriptions live in `.codecompass/description.jsonl`, not on the graph
+  nodes.** One `{"node": "<id>", "description": "..."}` per line, joined onto
+  every result by node id. `graph.json` is parser output and is rebuilt
+  wholesale each ingest; keeping descriptions out of it means they survive that
+  rebuild — and a deleted `graph.json` — with no carry-over logic. Entries whose
+  node the parser no longer produces are pruned at the end of each ingest.
+  Graphs from older versions are migrated on first load: agent-authored
+  descriptions move to the sidecar, generated placeholders are dropped.
+- **No more placeholder descriptions.** An entity nobody has described reads as
+  `""` instead of `"python function in x.py"` — real signal or nothing.
+- **AGENTS.md rewritten around two standing priorities**: improving the graph
+  (write back what you learn, re-ingest after every change) and keeping
+  `overview.md` / `memory.md` / `learnings.md` correct after every ingest. It
+  now documents every MCP tool with its inputs, outputs, and when to use it,
+  plus what each file in `.codecompass/` holds and who writes it.
+- **The pi skill file self-updates.** `setup_pi` rewrites a marker-bearing
+  `SKILL.md` it previously installed when the package ships new text, instead of
+  skipping forever once the file exists. A copy the user edited (marker removed)
+  is still left alone.
+- **Reworded the `next` write-back reminder** on every read result and on
+  `ingest`: it now invites the agent to add whatever would make the graph more
+  helpful, and after an ingest also to refresh the notes files.
+
+### Fixed
+- **`add_entity` no longer resurrects deleted symbols.** Describing a node the
+  parser already produces marked it `agent_created`, which re-added it on every
+  subsequent ingest even after the symbol was deleted from source. The flags
+  (`agent_inferred` / `agent_created`, still what tells the join your work from
+  code you deleted) are now set only for nodes `add_entity` actually creates.
+
 ## [5.3.0] - 2026-07-22
 
 ### Added

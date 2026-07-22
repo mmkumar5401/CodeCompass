@@ -117,17 +117,21 @@ The index follows the graph's lifecycle: wiped and rebuilt at the end of every
 `ingest`, so parser nodes *and* agent-recorded ones are searchable. Without the
 extra, ingest simply skips the vector step.
 
-### Enrichment (agent-in-the-loop)
+### Agent-written knowledge
 
-Via the MCP tools: `enrich` stages entities for an agent swarm (one-line
-descriptions + missing call edges), `enrich(apply=True)` merges the swarm's
-results, and `add_entity` / `add_call` record single parser-missed entries.
+The parser extracts structure. Everything it *can't* see — dynamic dispatch,
+callbacks, runtime registration — and everything it can't know — what an entity
+is FOR — comes from the agent reading the code and writing it back with
+`add_entity` / `add_call`. There is no bulk enrichment pass and no LLM
+backfill: the graph improves as it gets used, or not at all.
 
-`enrich` is a bulk, user-triggered pass. `add_entity`/`add_call` are the
-opportunistic version: as an agent reads code and spots something the parser
-missed, it records it immediately. Everything agent-written is marked
-`agent_inferred` and **preserved across re-ingests** — the graph gets better
-with use. Ambiguous call targets are skipped, never guessed.
+Descriptions live in `.codecompass/description.jsonl`, one
+`{"node": "<id>", "description": "..."}` per line, joined onto every query
+result by node id. Keeping them out of `graph.json` means they survive the
+wholesale rebuild each `ingest` performs (and a deleted `graph.json`), while
+entries whose node vanishes from the source are pruned on the next ingest.
+Agent-written nodes and edges are marked `agent_inferred`; ambiguous call
+targets are skipped, never guessed.
 
 ### Flow: `flow` vs `flow-summary`
 
@@ -152,9 +156,8 @@ with use. Ambiguous call targets are skipped, never guessed.
 | `dead_code(include_entrypoints)` | Entities with no inbound caller |
 | `styles(element)` | CSS selectors that style an element |
 | `tree()` | Full project hierarchy |
-| `enrich(apply, batch_size)` | Stage/merge agent-written descriptions + missing call edges |
-| `add_entity(name, kind, file, line, description)` | Record a parser-missed entity (`agent_inferred`) |
-| `add_call(caller, callee, line)` | Record a parser-missed CALLS edge (`agent_inferred`) |
+| `add_entity(name, kind, file, line, description)` | Record a parser-missed entity, or describe an existing one (`agent_inferred`) |
+| `add_call(caller, callee, line, relation)` | Record a parser-missed CALLS/IMPORTS/INHERITS edge (`agent_inferred`) |
 | `set_repo` / `get_repo` / `init` / `ingest` | Project selection & indexing |
 
 ---
@@ -204,9 +207,11 @@ Source files
    ▼  code_queries       traversal helpers: grep / impact / blast_radius /
                           deps / flow / dead_code / tree
    ▼  mcp_server         FastMCP server — the only query surface for agents
-   ▼  enricher            agent-in-the-loop: enrich batches (descriptions +
-                          missing calls) and opportunistic add_entity/add_call
-                          writes — agent_inferred, preserved across re-ingest
+   ▼  agent_writes        add_entity / add_call: what the parser can't see,
+                          written back by the agent — agent_inferred, preserved
+                          across re-ingest
+   ▼  description.jsonl   node id → description, joined onto every result;
+                          outlives the graph rebuild, pruned when a node dies
    ▼  vector_store        optional: entity embeddings in vectors.lance (LanceDB
                           + fastembed), wiped & rebuilt on every ingest
 ```
@@ -219,9 +224,13 @@ Inside each indexed project:
 
 ```
 your-project/
-├── .codecompass/graph.json      the code knowledge graph (auto-generated)
-├── .codecompass/vectors.lance/  semantic search index (optional, rebuilt on ingest)
-└── AGENTS.md                    discovery guide for agents (auto-updated)
+├── .codecompass/graph.json           the code knowledge graph (auto-generated)
+├── .codecompass/description.jsonl    agent-written descriptions, keyed by node id
+├── .codecompass/overview.md          what this repo is (agent-maintained)
+├── .codecompass/memory.md            how it's built (agent-maintained)
+├── .codecompass/learnings.md         what to watch out for (agent-maintained)
+├── .codecompass/vectors.lance/       semantic search index (optional, rebuilt on ingest)
+└── AGENTS.md                         discovery guide for agents (auto-updated)
 ```
 
 ---
@@ -229,9 +238,9 @@ your-project/
 ## Limitations
 
 - **Structure first, semantics layered on** — the parser knows what calls what,
-  not what it means. Two optional layers close that gap: `enrich` (agent-written
-  descriptions and missed edges, marked `agent_inferred`) and `search`
-  (semantic vector search over those descriptions and names).
+  not what it means. Agents close that gap as they work (`add_entity` /
+  `add_call`, marked `agent_inferred`), and `search` makes the result
+  semantically findable. An unexplored corner of the repo stays undescribed.
 - **Static analysis** — dynamic dispatch, reflection, and string-based invocation
   can't be fully resolved. `impact` surfaces those flagged `resolved: false`, and
   `dead_code` results are always candidates to verify.

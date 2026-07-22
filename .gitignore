@@ -36,14 +36,11 @@ benchmarks/results/*.json
 # Claude local settings (personal, not for team)
 .claude/settings.local.json
 
-# CodeCompass transient describe-swarm staging dir
-.codecompass/describe/
-
 # CodeCompass transient flow query outputs
 .codecompass/flow_*.json
 
-# CodeCompass transient enrich-swarm staging dir
-.codecompass/enrich/
-
 # CodeCompass vector index (rebuilt on ingest)
 .codecompass/vectors.lance/
+
+# CodeCompass half-built graph from an interrupted ingest
+.codecompass/graph.json.copy

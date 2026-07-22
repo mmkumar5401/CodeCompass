@@ -101,11 +101,10 @@ def _active_repo() -> str:
 # Attached to every read result: exploring is when the agent learns what the
 # parser missed, so the reminder to write it back rides along with the answer.
 _RECORD_NUDGE = (
-    "Before moving on: anything you read that the graph is missing or "
-    "describes badly — record it now. add_entity(name, kind, file, line, "
-    "description) for entities, add_call(caller, callee, line) for calls. "
-    "Ambiguous entries are skipped, not guessed; agent-recorded data survives "
-    "re-ingest."
+    "If in your exploration of the code and the codecompass graph if you felt "
+    "anything was missing which if added could make the graph more helpful "
+    "please add it using add_call add_entity. It can be entities, imports, "
+    "calls, description, anything."
 )
 
 
@@ -287,29 +286,10 @@ async def ingest(ctx: Context, normalize: bool = False,
                           dump_triples=dump_triples, on_progress=on_progress))
     return {"status": "ok", "repo": repo, "project": os.path.basename(repo),
             "normalize": normalize, "dump_triples": dump_triples,
-            "next": "Record anything the parser missed while you were reading "
-                    "code: add_entity for entities, add_call for call edges. "
-                    "Agent-recorded data survives re-ingest."}
-
-
-@mcp.tool()
-def enrich(apply: bool = False, batch_size: int = 15, force: bool = False) -> dict:
-    """Agent-driven graph enrichment: descriptions + missing call edges.
-
-    Default (apply=False) stages batches under .codecompass/enrich/ — read the
-    INSTRUCTIONS.md there, dispatch a sub-agent per batch file to write
-    descriptions and missing callers/callees, then call enrich(apply=True) to
-    merge results into the graph. Ambiguous call targets are skipped, never
-    guessed; agent-added edges carry agent_inferred=True.
-    """
-    repo = _active_repo()
-    _ensure_initialized(repo)
-    if apply:
-        from ingestion.enricher import apply_enrich_results
-        stats = apply_enrich_results(repo)
-        return {"status": "ok", **stats}
-    from ingestion.enricher import prepare_enrich_batches
-    return prepare_enrich_batches(repo, batch_size=batch_size, force=force)
+            "next": _RECORD_NUDGE + " Then revisit .codecompass/overview.md, "
+                    "memory.md, and learnings.md: update what this change made "
+                    "wrong, add what it made worth knowing, delete what no "
+                    "longer applies."}
 
 
 @mcp.tool()
@@ -325,7 +305,7 @@ def add_entity(name: str, kind: str = "function", file: str = "",
     """
     repo = _active_repo()
     _ensure_initialized(repo)
-    from ingestion.enricher import add_entity as _add
+    from ingestion.agent_writes import add_entity as _add
     return _add(repo, name, kind=kind, file=file, line=line,
                 description=description, language=language)
 
@@ -347,7 +327,7 @@ def add_call(caller: str, callee: str, line: int | None = None,
     """
     repo = _active_repo()
     _ensure_initialized(repo)
-    from ingestion.enricher import add_call as _add
+    from ingestion.agent_writes import add_call as _add
     return _add(repo, caller, callee, line=line, relation=relation)
 
 

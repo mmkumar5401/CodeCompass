@@ -55,7 +55,6 @@ async def test_mcp_tools_registered(configured):
         "get_repo",
         "init",
         "ingest",
-        "enrich",
         "add_entity",
         "add_call",
         "blast_radius",

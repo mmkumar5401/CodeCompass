@@ -1,11 +1,8 @@
-"""Enrich staging/apply: descriptions merge, unambiguous missing calls become
-agent_inferred CALLS edges, ambiguous names are skipped."""
-
-import json
+"""Agent writes: add_entity/add_call populate the graph, descriptions land in
+the sidecar, ambiguous names are skipped, and all of it survives a re-ingest."""
 
 from graph.code_graph_client import get_client
-from ingestion.enricher import (add_call, add_entity, apply_enrich_results,
-                                prepare_enrich_batches)
+from ingestion.agent_writes import add_call, add_entity
 from models.code_types import FileNode
 
 
@@ -24,7 +21,6 @@ def _seed(repo_path, project):
             type="Entity", name=name, kind="function:python",
             entity_type="function", language="python",
             file="src/a.py", project=project, line=1,
-            description=f"python function in src/a.py",
         )
     # Two same-named entities in other files -> ambiguous resolution target
     for f in ("src/b.py", "src/c.py"):
@@ -36,42 +32,6 @@ def _seed(repo_path, project):
         )
     client.save()
     client.close()
-
-
-def test_enrich_stage_and_apply(tmp_path):
-    project = "demo"
-    repo_path = tmp_path / project
-    repo_path.mkdir()
-    _seed(repo_path, project)
-
-    staged = prepare_enrich_batches(str(repo_path))
-    assert staged["num_entities"] == 4
-    enrich_dir = repo_path / ".codecompass" / "enrich"
-    batch = json.loads((enrich_dir / "batch_0000.json").read_text())
-    caller = next(p for p in batch if p["name"] == "caller")
-    assert caller["known_callees"] == [] and caller["snippet"]
-
-    # Fake the sub-agent's result: description + one resolvable + one
-    # ambiguous missing call.
-    result = {
-        f"{project}:caller": {
-            "description": "Entry point that delegates to callee.",
-            "missing_calls": [{"to": "callee", "line": 2}, {"to": "shared"}],
-        }
-    }
-    (enrich_dir / "batch_0000.result.json").write_text(json.dumps(result))
-
-    stats = apply_enrich_results(str(repo_path))
-    assert stats == {"descriptions": 1, "edges_added": 1, "calls_skipped": 1}
-
-    client = get_client(str(repo_path))
-    node = client.graph.nodes[f"{project}:caller"]
-    assert node["description"] == "Entry point that delegates to callee."
-    edges = client.graph.get_edge_data(f"{project}:caller", f"{project}:callee")
-    edge = next(e for e in edges.values() if e.get("type") == "CALLS")
-    assert edge["agent_inferred"] is True and edge["line"] == 2
-    client.close()
-    assert not enrich_dir.exists()  # cleaned up
 
 
 def test_add_entity_and_add_call(tmp_path):
@@ -87,19 +47,23 @@ def test_add_entity_and_add_call(tmp_path):
     client = get_client(str(repo_path))
     node = client.graph.nodes[r["id"]]
     assert node["language"] == "python" and node["kind"] == "function:python"
-    assert node["line"] == 9 and node["agent_inferred"] is True
+    # flagged because the parser never produced it: the ingest join re-adds it
+    assert node["line"] == 9 and node["agent_created"] is True
+    # the description is NOT a node attribute — it lives in the sidecar
+    assert "description" not in node
+    assert client.describe(r["id"]) == "Async helper."
     client.close()
-    # Upsert: same name+file updates instead of duplicating; a field left
-    # blank on update keeps the previous value (no clobbering with fallback)
+    # Upsert: same name+file updates instead of duplicating; a blank description
+    # on update keeps the recorded one rather than clearing it
     r = add_entity(str(repo_path), "helper", file="src/a.py")
     assert r["status"] == "updated"
     client = get_client(str(repo_path))
-    assert client.graph.nodes[r["id"]]["description"] == "Async helper."
+    assert client.describe(r["id"]) == "Async helper."
     client.close()
-    # Fallback description when the agent gives none
+    # No description given, none invented — an undescribed entity reads as ""
     r2 = add_entity(str(repo_path), "bare", file="src/a.py")
     client = get_client(str(repo_path))
-    assert client.graph.nodes[r2["id"]]["description"] == "python function in src/a.py"
+    assert client.describe(r2["id"]) == ""
     client.close()
 
     # Parser-missed edge: resolvable -> added once, then idempotent
@@ -129,8 +93,8 @@ def test_add_entity_and_add_call(tmp_path):
                     relation="IMPORTS")["status"] == "skipped"
 
     client = get_client(str(repo_path))
-    node = next(a for _, a in client.graph.nodes(data=True) if a.get("name") == "helper")
-    assert node["description"] == "Async helper." and node["agent_inferred"] is True
+    helper_id = next(n for n, a in client.graph.nodes(data=True) if a.get("name") == "helper")
+    assert client.describe(helper_id) == "Async helper."
     edge = next(e for e in client.graph.get_edge_data(
         f"{project}:caller", f"{project}:callee").values() if e.get("type") == "CALLS")
     assert edge["agent_inferred"] is True
@@ -144,9 +108,25 @@ def test_add_entity_and_add_call(tmp_path):
     client.close()
 
 
+def test_describing_a_parser_node_claims_no_ownership(tmp_path):
+    """add_entity on an entity the parser already produces must not flag it —
+    that would resurrect the symbol on every ingest after it's deleted."""
+    project = "demo"
+    repo_path = tmp_path / project
+    repo_path.mkdir()
+    _seed(repo_path, project)
+
+    add_entity(str(repo_path), "caller", file="src/a.py", description="Entry point.")
+
+    client = get_client(str(repo_path))
+    assert "agent_created" not in client.graph.nodes[f"{project}:caller"]
+    assert client.describe(f"{project}:caller") == "Entry point."
+    client.close()
+
+
 def test_agent_data_survives_reingest(tmp_path):
-    """Full ingest clears the graph; agent_inferred nodes/edges/descriptions
-    must be preserved across the rebuild."""
+    """The parse is authoritative for parser-visible code, but the join carries
+    over what only the agent knows: its nodes, edges, and descriptions."""
     project = "demo"
     repo_path = tmp_path / project
     repo_path.mkdir()
@@ -168,13 +148,16 @@ def test_agent_data_survives_reingest(tmp_path):
     cc_main.ingest_code(str(repo_path))  # full rebuild
 
     client = get_client(str(repo_path))
-    helper = next(a for _, a in client.graph.nodes(data=True) if a.get("name") == "helper")
-    assert helper["agent_inferred"] is True and helper["description"] == "Async helper."
+    # The agent's CALLS edge joins back on: both ends still exist in source.
     agent_edges = [(u, v) for u, v, e in client.graph.edges(data=True)
                    if e.get("type") == "CALLS" and e.get("agent_inferred")]
     assert len(agent_edges) == 1
     names = {client.graph.nodes[n].get("name") for n in agent_edges[0]}
     assert names == {"caller", "target"}
+    # The node the parser can't see, and its description, are carried over
+    helper_id = next(n for n, a in client.graph.nodes(data=True) if a.get("name") == "helper")
+    assert client.graph.nodes[helper_id]["agent_created"] is True
+    assert client.describe(helper_id) == "Async helper."
     # The file-less stdlib node and its IMPORTS edge survive too
     assert client.graph.nodes[f"{project}:pathlib"]["agent_created"] is True
     assert any(e.get("type") == "IMPORTS" and e.get("agent_inferred")

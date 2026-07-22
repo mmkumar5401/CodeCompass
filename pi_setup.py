@@ -9,8 +9,10 @@ auto-run on the first CLI / server invocation, does the whole chain:
     3. copy the codecompass skill to the user-global pi skills dir.
     4. register the codecompass-mcp server in the user-global mcp.json.
 
-Everything is idempotent: the presence of the installed skill file is the
-marker, so repeated invocations are a cheap stat + no-op.
+Everything is idempotent. The installed skill file carries a generated-by
+marker: a copy we wrote is rewritten on every run so an upgraded package ships
+its new instructions, while a copy the user has edited (marker removed) is left
+alone. Unchanged content short-circuits before any write.
 """
 
 from __future__ import annotations
@@ -33,7 +35,12 @@ _SERVER_CONFIG = {"command": "codecompass-mcp"}
 
 # Shipped as the pi skill. pi has the MCP tools natively via pi-mcp-adapter;
 # this teaches the orient-first discipline and lists the capabilities.
-_SKILL_MD = """\
+#
+# The marker below is what makes the skill self-updating: init-style, we only
+# overwrite files we wrote. Strip the line to take ownership of your copy.
+_SKILL_MARKER = "<!-- Installed by `codecompass setup-pi` — rewritten on upgrade. -->"
+
+_SKILL_MD = _SKILL_MARKER + """
 ---
 name: codecompass
 description: Orient in any indexed repo through the CodeCompass code graph before reading files. Use for discovery, impact/dependency traces, dead-code checks, and flow analysis in any repository with a .codecompass/graph.json index.
@@ -79,10 +86,11 @@ point it at another repo.
 
 ## Notes
 
-- `codecompass_enrich` is expensive — only run it when the user explicitly asks.
-  Merge staged results with `codecompass_enrich(apply=True)`.
-- Use `add_entity`/`add_call` opportunistically while reading; entries are marked
+- Use `add_entity`/`add_call` opportunistically while reading — they are the ONLY
+  way the graph gains descriptions and parser-invisible edges. Entries are marked
   `agent_inferred` and survive re-ingest. Flush what you learned before re-ingesting.
+- After every ingest, also update `.codecompass/overview.md`, `memory.md`, and
+  `learnings.md`: correct what changed, delete what no longer applies.
 - If the graph looks stale or incomplete, re-run `codecompass_ingest`.
 """
 
@@ -120,11 +128,23 @@ def _write_mcp_config() -> None:
     _MCP_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
 
 
+def _skill_is_current() -> bool:
+    """True when the installed skill needs no write — either it is already our
+    latest text, or the user has taken it over by stripping the marker."""
+    try:
+        existing = _SKILL_FILE.read_text()
+    except OSError:
+        return False
+    return existing == _SKILL_MD or _SKILL_MARKER not in existing
+
+
 def setup_pi(force: bool = False, quiet: bool = False) -> bool:
     """Bootstrap CodeCompass into pi. Returns True if pi setup is in place.
 
-    No-op (returns False) when pi is not installed. Idempotent: the installed
-    skill file is the marker, so a normal run after the first is a single stat.
+    No-op (returns False) when pi is not installed. Idempotent, and
+    self-updating: a marker-bearing skill file we installed is rewritten when
+    the package ships new text, so upgrades reach existing users. A file the
+    user edited (marker gone) is never touched unless force=True.
     """
 
     def say(msg: str) -> None:
@@ -135,7 +155,7 @@ def setup_pi(force: bool = False, quiet: bool = False) -> bool:
         say("pi not installed; skipping CodeCompass pi setup.")
         return False
 
-    if _SKILL_FILE.exists() and not force:
+    if _skill_is_current() and not force:
         return True
 
     if not _adapter_installed():

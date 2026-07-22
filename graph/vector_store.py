@@ -47,32 +47,36 @@ def _db_path(repo_path: str) -> str:
     return os.path.join(repo_path, ".codecompass", DB_DIRNAME)
 
 
-def _entity_text(a: dict) -> str:
+def _entity_text(a: dict, description: str) -> str:
     """The string that gets embedded for one entity node."""
     parts = [a.get("kind") or "", a.get("name") or "", a.get("file") or "",
-             a.get("description") or ""]
+             description]
     return " ".join(p for p in parts if p)
 
 
 def index_entities(repo_path: str) -> int:
     """Wipe and rebuild the vector index from graph.json. Returns rows indexed."""
+    from graph.code_graph_client import load_descriptions
+
     lancedb, _ = _deps()
     graph_path = os.path.join(repo_path, ".codecompass", "graph.json")
     with open(graph_path) as f:
         nodes = json.load(f).get("nodes", [])
+    descriptions = load_descriptions(repo_path)
 
     rows = []
     for a in nodes:
         if a.get("type") != "Entity":
             continue
+        description = descriptions.get(a.get("id") or "", "")
         rows.append({
             "id": a.get("id") or "",
             "name": a.get("name") or "",
             "kind": a.get("kind") or "",
             "file": a.get("file") or "",
             "line": a.get("line") or 0,
-            "description": a.get("description") or "",
-            "text": _entity_text(a),
+            "description": description,
+            "text": _entity_text(a, description),
         })
     if not rows:
         return 0

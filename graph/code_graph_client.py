@@ -37,6 +37,52 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Descriptions do NOT live on the graph nodes. graph.json is parser output,
+# rebuilt from scratch on every ingest; a description is the one thing in the
+# graph no parser can regenerate, so it lives in its own sidecar keyed by node
+# id and is joined back on read. One {"node", "description"} object per line —
+# line-diffable, greppable, and survives a deleted or corrupt graph.json.
+DESCRIPTIONS_FILE = os.path.join(".codecompass", "description.jsonl")
+
+
+def descriptions_path(repo_path: str) -> str:
+    return os.path.join(repo_path, DESCRIPTIONS_FILE)
+
+
+def load_descriptions(repo_path: str) -> dict[str, str]:
+    """Read the sidecar as {node_id: description}.
+
+    A missing file or an unparseable line yields nothing rather than raising —
+    a query must still answer when the sidecar is absent.
+    """
+    out: dict[str, str] = {}
+    try:
+        with open(descriptions_path(repo_path), encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("node") and row.get("description"):
+                    out[row["node"]] = row["description"]
+    except OSError:
+        pass
+    return out
+
+
+def save_descriptions(repo_path: str, descriptions: dict[str, str]) -> int:
+    """Write the sidecar, one JSON object per line, sorted by node id."""
+    path = descriptions_path(repo_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for nid in sorted(descriptions):
+            if descriptions[nid]:
+                f.write(json.dumps({"node": nid, "description": descriptions[nid]}) + "\n")
+    return len(descriptions)
+
+
 def _entity_id(project: str, name: str, file: str | None, owner: str | None = None) -> str:
     """Node id for an entity — file- and class-qualified so same-named entities
     stay distinct across files AND across classes in the same file. Case is
@@ -148,8 +194,37 @@ class LocalGraphClient:
 
     def __init__(self, storage_path: str) -> None:
         self.storage_path = storage_path
+        # .../<repo>/.codecompass/graph.json -> <repo>
+        self.repo_path = os.path.dirname(os.path.dirname(storage_path))
         self.graph = nx.MultiDiGraph()
+        self.descriptions = load_descriptions(self.repo_path)
+        # Ingest builds a throwaway graph and flips this on only for the final
+        # write, so a half-built graph never rewrites the description sidecar.
+        self.sync_descriptions = True
         self.load()
+
+    def describe(self, node_id: str) -> str:
+        """Description for a node, joined from the sidecar. '' when undescribed."""
+        return self.descriptions.get(node_id, "")
+
+    def set_description(self, node_id: str, text: str) -> None:
+        """Record a description for a node (empty text clears it)."""
+        text = (text or "").strip()
+        if text:
+            self.descriptions[node_id] = text
+        else:
+            self.descriptions.pop(node_id, None)
+
+    def prune_descriptions(self) -> int:
+        """Drop sidecar entries whose node no longer exists in the graph.
+
+        Called after an ingest rebuild: a renamed or deleted symbol takes its
+        description with it instead of lingering as a ghost forever.
+        """
+        stale = [nid for nid in self.descriptions if nid not in self.graph]
+        for nid in stale:
+            del self.descriptions[nid]
+        return len(stale)
 
     def load(self) -> None:
         """Load graph from JSON file."""
@@ -161,13 +236,29 @@ class LocalGraphClient:
             except (json.JSONDecodeError, Exception) as e:
                 print(f"Warning: Could not load graph from {self.storage_path} ({e}). Starting fresh.")
                 self.graph = nx.MultiDiGraph()
+            self._adopt_legacy_descriptions()
+
+    def _adopt_legacy_descriptions(self) -> None:
+        """Move descriptions off nodes written by pre-sidecar versions.
+
+        Older graphs stored the description as a node attribute and flagged the
+        agent-authored ones; only those are worth keeping (the rest were
+        generated blurbs like "python function in x.py"). The attributes are
+        dropped as they are read, so this runs exactly once per graph.
+        """
+        for _nid, a in self.graph.nodes(data=True):
+            legacy = a.pop("description", None)
+            if legacy and a.get("agent_inferred"):
+                self.descriptions.setdefault(_nid, legacy)
 
     def save(self) -> None:
-        """Save graph to JSON file."""
+        """Save the graph and its description sidecar."""
         os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
         data = nx.node_link_data(self.graph, edges="links")
         with open(self.storage_path, "w") as f:
             json.dump(data, f, indent=2)
+        if self.sync_descriptions:
+            save_descriptions(self.repo_path, self.descriptions)
 
     # ------------------------------------------------------------------
     # Structural nodes (hierarchy skeleton)
@@ -232,7 +323,6 @@ class LocalGraphClient:
             "entity_type": triple.from_type,
             "language": language,
             "kind": f"{triple.from_type}:{language}",
-            "description": f"{language} {triple.from_type} in {triple.source_file}",
             "project": project,
             "file": triple.source_file,
         })
@@ -248,7 +338,7 @@ class LocalGraphClient:
         if getattr(triple, "owner_class", None):
             self.graph.nodes[from_id]["owner"] = triple.owner_class
 
-        # Upsert to entity — only set language/kind/description if not already known
+        # Upsert to entity — only set language/kind if not already known
         self.graph.add_node(to_id)
         existing = self.graph.nodes[to_id]
         existing.setdefault("type", "Entity")
@@ -258,7 +348,6 @@ class LocalGraphClient:
         if not existing.get("language"):
             existing["language"] = language
             existing["kind"] = f"{triple.to_type}:{language}"
-            existing["description"] = f"{language} {triple.to_type}"
         # A module's definition is line 1 of its file.
         if triple.relation_type == "DEFINED_IN" and triple.to_type == "module":
             existing.setdefault("line", 1)
@@ -487,7 +576,7 @@ class LocalGraphClient:
                         "caller_type": node.get("entity_type"),
                         "caller_file": call_edge.get("source_file") or node.get("file"),
                         "line": call_edge.get("line"),
-                        "description": node.get("description"),
+                        "description": self.describe(pred),
                         "receiver": receiver,
                         "receiver_type": receiver_type,
                         "resolved": True,
@@ -521,7 +610,7 @@ class LocalGraphClient:
                         "caller_type": node.get("entity_type"),
                         "caller_file": ce.get("source_file") or node.get("file"),
                         "line": ce.get("line"),
-                        "description": node.get("description"),
+                        "description": self.describe(pred),
                         "receiver": next((e.get("receiver") for e in rel if e.get("receiver")), None),
                         "receiver_type": None,
                         "resolved": False,
@@ -552,8 +641,11 @@ class LocalGraphClient:
         for _n, a in self.graph.nodes(data=True):
             if a.get("type") != "Entity" or a.get("project") != project:
                 continue
+            description = self.describe(_n)
             for f in fields:
-                val = str(a.get(f) or "")
+                # description is not a node attribute — it is joined from the
+                # sidecar, and grep searches it like any other field.
+                val = description if f == "description" else str(a.get(f) or "")
                 m = rx.search(val) if val else None
                 if m:
                     matches.append({
@@ -561,7 +653,7 @@ class LocalGraphClient:
                         "kind": a.get("kind"),
                         "file": a.get("file"),
                         "line": a.get("line"),
-                        "description": a.get("description"),
+                        "description": description,
                         "matched_field": f,
                         "match": m.group(0),
                     })
@@ -598,7 +690,7 @@ class LocalGraphClient:
                             "dependency": node.get("name"),
                             "dep_type": node.get("entity_type"),
                             "line": node.get("line"),
-                            "description": node.get("description"),
+                            "description": self.describe(succ),
                             "depth": depth + 1
                         })
                     
@@ -620,7 +712,7 @@ class LocalGraphClient:
                             "selector": node.get("name"),
                             "source_file": node.get("file"),
                             "line": edge.get("line"),
-                            "description": node.get("description"),
+                            "description": self.describe(pred),
                         })
 
         return sorted(results, key=lambda x: x["selector"])
@@ -646,7 +738,7 @@ class LocalGraphClient:
             "id": start_id,
             "name": start_attr.get("name", start_name),
             "kind": start_attr.get("kind", ""),
-            "description": start_attr.get("description", ""),
+            "description": self.describe(start_id),
             "file": start_attr.get("file", ""),
             "line": start_attr.get("line"),
             "depth": 0,
@@ -680,7 +772,7 @@ class LocalGraphClient:
                         "id": succ,
                         "name": succ_attr.get("name", ""),
                         "kind": succ_attr.get("kind", ""),
-                        "description": succ_attr.get("description", ""),
+                        "description": self.describe(succ),
                         "file": succ_attr.get("file", ""),
                         "line": succ_attr.get("line"),
                         "depth": depth + 1,
@@ -717,7 +809,7 @@ class LocalGraphClient:
                             "callee_type": node.get("entity_type"),
                             "callee_file": node.get("file"),
                             "line": node.get("line"),
-                            "description": node.get("description"),
+                            "description": self.describe(succ),
                             "depth": depth + 1
                         })
                         visited.add(succ)
@@ -790,7 +882,7 @@ class LocalGraphClient:
                 "entity_type": attr.get("entity_type", ""),
                 "file": attr.get("file", ""),
                 "line": attr.get("line"),
-                "description": attr.get("description", ""),
+                "description": self.describe(node_id),
             }
             # Exported symbols and name-heuristic entry points are public API:
             # having no in-repo caller is expected, not evidence of dead code.
@@ -926,7 +1018,11 @@ class LocalGraphClient:
                 importers.append(from_file)
         return sorted(set(importers))
 
-def get_client(project_path: str) -> LocalGraphClient:
-    """Return a LocalGraphClient for the project at project_path."""
-    storage_path = os.path.join(project_path, ".codecompass", "graph.json")
+def get_client(project_path: str, filename: str = "graph.json") -> LocalGraphClient:
+    """Return a LocalGraphClient for the project at project_path.
+
+    `filename` exists so ingest can build into `graph.json.copy` and swap it in
+    once the rebuild succeeds, rather than clearing the live graph in place.
+    """
+    storage_path = os.path.join(project_path, ".codecompass", filename)
     return LocalGraphClient(storage_path)
