@@ -1,6 +1,6 @@
 [project]
 name = "codecompass-mcp"
-version = "6.0.0"
+version = "6.0.1"
 description = "Structural code context for AI coding agents — a local code knowledge graph for blast radius, impact, deps, dead code, and flow tracing"
 readme = "README.md"
 license = {text = "MIT"}

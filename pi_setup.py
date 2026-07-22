@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 # Where pi loads user-global skills and pi-mcp-adapter reads user-global servers.
@@ -30,8 +31,24 @@ _MCP_CONFIG = Path.home() / ".config" / "mcp" / "mcp.json"
 _ADAPTER_PKG = "npm:pi-mcp-adapter"
 _ADAPTER_NAME = "pi-mcp-adapter"
 
+def _server_command() -> str:
+    """Absolute path to the codecompass-mcp console script, when we can find it.
+
+    A bare "codecompass-mcp" only resolves if pi inherits a PATH that reaches
+    this interpreter's bin dir — which it often doesn't. Under pyenv it is
+    worse than missing: the shim resolves a *different* Python depending on the
+    launch directory's .python-version, so pi silently gets "command not found"
+    while the same name works in a shell inside the project. The script sitting
+    next to sys.executable is the one belonging to the environment codecompass
+    is actually installed in.
+    """
+    script = Path(sys.executable).with_name("codecompass-mcp")
+    return str(script) if script.exists() else "codecompass-mcp"
+
+
 # The codecompass-mcp server entry merged into the user-global mcp.json.
-_SERVER_CONFIG = {"command": "codecompass-mcp"}
+def _server_config() -> dict:
+    return {"command": _server_command()}
 
 # Shipped as the pi skill. pi has the MCP tools natively via pi-mcp-adapter;
 # this teaches the orient-first discipline and lists the capabilities.
@@ -39,6 +56,13 @@ _SERVER_CONFIG = {"command": "codecompass-mcp"}
 # The marker below is what makes the skill self-updating: init-style, we only
 # overwrite files we wrote. Strip the line to take ownership of your copy.
 _SKILL_MARKER = "<!-- Installed by `codecompass setup-pi` — rewritten on upgrade. -->"
+
+# Copies installed before the marker existed. A file carrying one of these is
+# ours to replace, even without the marker — otherwise every pre-6.0.0 install
+# would be pinned to its original skill text forever.
+_LEGACY_SIGNATURES = (
+    "CodeCompass maps a repo into a queryable graph",
+)
 
 _SKILL_MD = _SKILL_MARKER + """
 ---
@@ -114,8 +138,10 @@ def _install_adapter() -> None:
     subprocess.run(["pi", "install", _ADAPTER_PKG], check=False, timeout=300)
 
 
-def _write_mcp_config() -> None:
-    """Merge the codecompass server into the user-global mcp.json, preserving others."""
+def _write_mcp_config() -> bool:
+    """Merge the codecompass server into the user-global mcp.json, preserving
+    others. Returns True if the file changed — a no-op when already correct, so
+    this is cheap enough to run on every invocation."""
     config: dict = {}
     if _MCP_CONFIG.exists():
         try:
@@ -123,19 +149,26 @@ def _write_mcp_config() -> None:
         except (json.JSONDecodeError, OSError):
             config = {}
     servers = config.setdefault("mcpServers", {})
-    servers["codecompass"] = _SERVER_CONFIG
+    wanted = _server_config()
+    if servers.get("codecompass") == wanted:
+        return False
+    servers["codecompass"] = wanted
     _MCP_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     _MCP_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
+    return True
 
 
 def _skill_is_current() -> bool:
     """True when the installed skill needs no write — either it is already our
-    latest text, or the user has taken it over by stripping the marker."""
+    latest text, or it is a file the user wrote and we must not touch."""
     try:
         existing = _SKILL_FILE.read_text()
     except OSError:
         return False
-    return existing == _SKILL_MD or _SKILL_MARKER not in existing
+    if existing == _SKILL_MD:
+        return True
+    ours = _SKILL_MARKER in existing or any(s in existing for s in _LEGACY_SIGNATURES)
+    return not ours
 
 
 def setup_pi(force: bool = False, quiet: bool = False) -> bool:
@@ -155,6 +188,12 @@ def setup_pi(force: bool = False, quiet: bool = False) -> bool:
         say("pi not installed; skipping CodeCompass pi setup.")
         return False
 
+    # Always reconcile the server entry: the path it should point at changes
+    # when codecompass is reinstalled into a different environment, and a stale
+    # one leaves pi with a server it cannot spawn.
+    if _write_mcp_config():
+        say(f"Pointed pi at {_server_command()} in {_MCP_CONFIG}")
+
     if _skill_is_current() and not force:
         return True
 
@@ -164,7 +203,6 @@ def setup_pi(force: bool = False, quiet: bool = False) -> bool:
 
     _SKILL_DIR.mkdir(parents=True, exist_ok=True)
     _SKILL_FILE.write_text(_SKILL_MD)
-    _write_mcp_config()
     say(f"CodeCompass wired into pi: {_SKILL_FILE}, {_MCP_CONFIG}")
     return True
 

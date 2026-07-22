@@ -1,5 +1,23 @@
 # Changelog
 
+## [6.0.1] - 2026-07-22
+
+### Fixed
+- **pi could not spawn the MCP server.** `mcp.json` recorded the bare name
+  `codecompass-mcp`, which resolves through `PATH` — and under pyenv that name
+  is a shim that picks its Python from the launch directory's
+  `.python-version`. Started outside the indexed project, pi resolved a Python
+  without codecompass installed and silently got "command not found", while the
+  same name worked in a shell inside the project. The entry now records the
+  console script next to `sys.executable`, an absolute path immune to `PATH`
+  and pyenv state, and `setup_pi` reconciles it on every run so reinstalling
+  into a different environment self-corrects.
+- **Skill files installed before 6.0.0 were never updated.** The new
+  marker-based rewrite treated a markerless file as user-authored, which
+  pinned every existing install to its original skill text — including the
+  removed `enrich` tool. Copies carrying a known pre-marker signature are now
+  adopted and refreshed; genuinely user-written files are still left alone.
+
 ## [6.0.0] - 2026-07-22
 
 ### Removed
