@@ -487,6 +487,7 @@ class LocalGraphClient:
                         "caller_type": node.get("entity_type"),
                         "caller_file": call_edge.get("source_file") or node.get("file"),
                         "line": call_edge.get("line"),
+                        "description": node.get("description"),
                         "receiver": receiver,
                         "receiver_type": receiver_type,
                         "resolved": True,
@@ -520,6 +521,7 @@ class LocalGraphClient:
                         "caller_type": node.get("entity_type"),
                         "caller_file": ce.get("source_file") or node.get("file"),
                         "line": ce.get("line"),
+                        "description": node.get("description"),
                         "receiver": next((e.get("receiver") for e in rel if e.get("receiver")), None),
                         "receiver_type": None,
                         "resolved": False,
@@ -559,6 +561,7 @@ class LocalGraphClient:
                         "kind": a.get("kind"),
                         "file": a.get("file"),
                         "line": a.get("line"),
+                        "description": a.get("description"),
                         "matched_field": f,
                         "match": m.group(0),
                     })
@@ -595,6 +598,7 @@ class LocalGraphClient:
                             "dependency": node.get("name"),
                             "dep_type": node.get("entity_type"),
                             "line": node.get("line"),
+                            "description": node.get("description"),
                             "depth": depth + 1
                         })
                     
@@ -615,7 +619,8 @@ class LocalGraphClient:
                         results.append({
                             "selector": node.get("name"),
                             "source_file": node.get("file"),
-                            "line": edge.get("line")
+                            "line": edge.get("line"),
+                            "description": node.get("description"),
                         })
 
         return sorted(results, key=lambda x: x["selector"])
@@ -712,6 +717,7 @@ class LocalGraphClient:
                             "callee_type": node.get("entity_type"),
                             "callee_file": node.get("file"),
                             "line": node.get("line"),
+                            "description": node.get("description"),
                             "depth": depth + 1
                         })
                         visited.add(succ)
@@ -784,6 +790,7 @@ class LocalGraphClient:
                 "entity_type": attr.get("entity_type", ""),
                 "file": attr.get("file", ""),
                 "line": attr.get("line"),
+                "description": attr.get("description", ""),
             }
             # Exported symbols and name-heuristic entry points are public API:
             # having no in-repo caller is expected, not evidence of dead code.

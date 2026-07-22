@@ -1,5 +1,14 @@
 # Changelog
 
+## [5.3.0] - 2026-07-22
+
+### Added
+- **Every entity row carries its `description`.** `grep`, `impact`, `deps`,
+  `trace`, `styles`, `dead_code`, and `flow` now return the graph's description
+  alongside name/kind/file/line, so an agent can judge relevance without a
+  follow-up read. `grep` already *matched* against descriptions; it now shows
+  the one it matched. Descriptions stay generic until `enrich` fills them in.
+
 ## [5.2.0] - 2026-07-22
 
 ### Added

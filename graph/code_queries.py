@@ -172,7 +172,8 @@ def fetch_flow(start_name: str, repo_path: str, project: str, max_hops: int = DE
     edges = _order_edges(edges, project, start_name)
     lean_nodes = [
         {"id": n["id"], "name": n["name"], "kind": n.get("kind", ""),
-         "file": n.get("file", ""), "line": n.get("line"), "depth": n["depth"]}
+         "file": n.get("file", ""), "line": n.get("line"), "depth": n["depth"],
+         "description": n.get("description", "")}
         for n in sorted(nodes, key=lambda n: n["depth"])
     ]
     lean_edges = [
