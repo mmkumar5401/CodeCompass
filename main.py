@@ -457,7 +457,7 @@ def _ensure_pi_agents_md(repo_path: str) -> None:
 
 
 def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None,
-                on_progress=None) -> None:
+                skip_vectors: bool = True, on_progress=None) -> None:
     """Ingest a codebase into the local code knowledge graph.
 
     Phase 1: Walk the repo and write the Project → Folder → File skeleton.
@@ -599,13 +599,16 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
 
     # Phase 5 — rebuild the vector index from the final graph (parser nodes
     # plus restored agent-inferred ones). Wipes and rewrites like the graph.
-    try:
-        from graph.vector_store import index_entities
-        _report(95, "Rebuilding vector index…")
-        n = index_entities(repo_path)
-        console.print(f"[dim]Phase 5/5 — Vector index rebuilt ({n} entities embedded)[/]")
-    except Exception as exc:
-        console.print(f"[dim]Phase 5/5 — Vector index skipped ({exc})[/]")
+    if skip_vectors:
+        console.print("[dim]Phase 5/5 — Vector index skipped (--skip-vectors)[/]")
+    else:
+        try:
+            from graph.vector_store import index_entities
+            _report(95, "Rebuilding vector index…")
+            n = index_entities(repo_path)
+            console.print(f"[dim]Phase 5/5 — Vector index rebuilt ({n} entities embedded)[/]")
+        except Exception as exc:
+            console.print(f"[dim]Phase 5/5 — Vector index skipped ({exc})[/]")
 
     _report(100, f"Done — {written} triples, {total_nodes} nodes.")
     console.print(

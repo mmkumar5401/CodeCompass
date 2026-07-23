@@ -276,12 +276,15 @@ def init() -> dict:
 
 @mcp.tool()
 async def ingest(ctx: Context, normalize: bool = False,
-                 dump_triples: str | None = None) -> dict:
+                 dump_triples: str | None = None,
+                 skip_vectors: bool = True) -> dict:
     """Re-index the currently configured repo and rebuild the code knowledge graph.
 
     normalize: normalize entity names via Haiku (slower, needs an API key).
     dump_triples: path to write the raw extracted triples as JSON instead of
-    loading them into the graph (debugging the parser)."""
+    loading them into the graph (debugging the parser).
+    skip_vectors: skip rebuilding the vector search index (Phase 5).
+    Re-ingest after adding descriptions / entities / calls to make them searchable."""
     repo = _active_repo()
     _ensure_initialized(repo)
 
@@ -292,7 +295,8 @@ async def ingest(ctx: Context, normalize: bool = False,
 
     await anyio.to_thread.run_sync(
         functools.partial(ingest_code, repo, normalize=normalize,
-                          dump_triples=dump_triples, on_progress=on_progress))
+                          dump_triples=dump_triples, skip_vectors=skip_vectors,
+                          on_progress=on_progress))
     return {"status": "ok", "repo": repo, "project": os.path.basename(repo),
             "normalize": normalize, "dump_triples": dump_triples,
             "next": _RECORD_NUDGE + " Then revisit .codecompass/overview.md, "
