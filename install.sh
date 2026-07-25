@@ -9,7 +9,7 @@
 #   2. runs `codecompass setup`, which wires every agent host present, pointing
 #      them all at the uv binary (~/.local/bin/codecompass-mcp):
 #      - pi:       pi-mcp-adapter + pi-hooks extensions, skill, MCP server entry
-#      - opencode: opencode-hooks-plugin plugin + MCP server in the global config
+#      - opencode: bundled Claude-hooks bridge plugin + MCP server in the global config
 #      Per-project files (AGENTS.md, .agents/, guard hooks) are written by
 #      `init`, which runs automatically the first time the MCP server is used
 #      in a repo.
