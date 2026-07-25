@@ -32,7 +32,7 @@ command -v uv >/dev/null 2>&1 || fail "uv installation failed."
 
 # --- 2. Install the package ---------------------------------------------------
 say "Installing $PKG with uv (isolated, no venvs touched)..."
-uv tool install --force "$PKG"
+uv tool install --force --refresh "$PKG"
 
 CODECOMPASS="$UV_BIN/codecompass"
 [ -x "$CODECOMPASS" ] || fail "$PKG installed but $CODECOMPASS is missing."
