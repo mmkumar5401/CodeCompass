@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.0.1] - 2026-07-25
+
+### Fixed
+- **`opencode_setup` was missing from the wheel** — `py-modules` didn't list
+  it, so a pip/uv-installed `codecompass setup` crashed with
+  ModuleNotFoundError.
+
 ## [7.0.0] - 2026-07-25
 
 ### Changed
