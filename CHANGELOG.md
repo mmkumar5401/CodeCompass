@@ -1,5 +1,34 @@
 # Changelog
 
+## [7.1.0] - 2026-07-25
+
+### Changed
+- **The guard hook now blocks by index, not by repo.** `grep`/`glob`/`cat` are
+  denied only where the graph has an answer: an indexed file, or a directory
+  containing one. Only parsed languages become File nodes, so a repo's
+  yaml/md/json/lock files now pass through — blocking them cost a turn and
+  offered no alternative, since no graph query describes a file the parser
+  never read. On a sample repo this was 37% of tracked files.
+- A directory is judged by what it contains, so `grep -r foo src/` is blocked
+  while `grep -r foo docs/` is allowed. A file is its own scope, which keeps
+  one rule covering both the search tools and whole-file dumps.
+
+### Added
+- **`.codecompass/files.txt`** — every indexed path, one per line, written by
+  ingest right after the graph swap. The hook reads this instead of
+  `graph.json`: it runs on every Bash/Grep/Glob call, and a few KB of paths
+  answers the containment question without parsing a multi-megabyte graph.
+  Added to the generated `.gitignore` alongside the other rebuilt artifacts.
+- `init` backfills `files.txt` from an existing graph, so repos ingested by an
+  earlier version keep their guard instead of silently allowing everything
+  until their next ingest.
+
+### Fixed
+- The guard's path comparison is now case-insensitive on both sides of the
+  relative-path calculation. `os.path.realpath` doesn't canonicalize case, so
+  a host passing a differently-cased cwd produced `../repo/a.py` and matched
+  nothing in the index — the guard would have switched off silently.
+
 ## [7.0.3] - 2026-07-25
 
 ### Changed

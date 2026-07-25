@@ -100,6 +100,7 @@ def init_project(repo_path: str) -> None:
     _ensure_opencode_config(repo_path)  # 3c. opencode guard (via .claude/settings.json)
     _ensure_gitignore(repo_path)
     _register_repo(repo_path)
+    _backfill_file_index(repo_path)     # 4. guard index for pre-existing graphs
     console.print(f"[bold green]Initialized CodeCompass in:[/] {compass_dir}")
 
 
@@ -210,6 +211,8 @@ _GITIGNORE_ENTRIES = [
     (".codecompass/vectors.tvim", "# CodeCompass vector index (rebuilt on ingest)"),
     (".codecompass/vectors.meta.json", "# CodeCompass vector index payloads (rebuilt on ingest)"),
     (".codecompass/graph.json.copy", "# CodeCompass half-built graph from an interrupted ingest"),
+    (".codecompass/files.txt", "# CodeCompass guard index (rewritten on ingest)"),
+    (".codecompass/files.txt.copy", "# CodeCompass half-written guard index"),
 ]
 
 
@@ -266,9 +269,21 @@ def _ensure_gitignore(repo_path: str) -> None:
 # text search (grep/rg and the Grep/Glob tools) is blocked. Whole-file `cat` is
 # blocked too: read targeted slices with the Read tool (or sed -n/head/tail)
 # once you know what to open.
+#
+# It blocks by index rather than by repo: only paths the graph actually covers
+# (`.codecompass/files.txt`) are denied. Blocking a file the parser never read
+# costs the agent a turn and offers no alternative, since no graph query will
+# ever describe it.
 _GUARD_HOOK_SCRIPT = r'''#!/usr/bin/env python3
-"""PreToolUse hook: block code search and whole-file dumps INSIDE codecompass
-projects; allow reads outside any registered repo (no graph exists there).
+"""PreToolUse hook: block code search and whole-file dumps where the graph can
+answer instead, and allow them where it can't.
+
+Scope is the index, not the repo. A path is blocked only when it is an indexed
+file or a directory containing one, read from `.codecompass/files.txt` (written
+by ingest). Only parsed languages become File nodes, so a repo's yaml/md/json/
+lock files — like anything outside a registered repo, and any repo with no
+index yet — pass through untouched: the graph holds nothing about them, so
+there is no answer to route the agent to.
 
 Installed by the codecompass `init` tool. Safe to edit — init only rewrites copies it installed.
 """
@@ -320,6 +335,54 @@ def _repo_containing(path: str):
     return None
 
 
+_INDEX_CACHE = {}
+
+
+def _index(repo: str) -> set:
+    """Relative paths of every file this repo's graph indexed, lowercased.
+
+    Written by ingest as `.codecompass/files.txt`. An empty set means there is
+    no index, which the caller treats the same as standing outside a repo.
+    """
+    if repo not in _INDEX_CACHE:
+        try:
+            with open(os.path.join(repo, ".codecompass", "files.txt")) as f:
+                _INDEX_CACHE[repo] = {line.strip().lower() for line in f if line.strip()}
+        except OSError:
+            _INDEX_CACHE[repo] = set()
+    return _INDEX_CACHE[repo]
+
+
+def _covers_indexed(path: str) -> bool:
+    """True if path is an indexed file, or a directory containing one.
+
+    A file is its own scope, so `cat api/Foo.php` and `grep -r x api/` ask the
+    same question: does the graph know anything here? Only parsed languages
+    become File nodes, so a repo's yaml/md/json/lock files are absent from the
+    index — the graph has no answer to give about them and the tool call is the
+    only way to find out, so those are allowed through.
+    """
+    repo = _repo_containing(path)
+    if repo is None:
+        return False
+    indexed = _index(repo)
+    if not indexed:
+        return False
+    # Both sides lowercased before relpath for the same reason _repo_containing
+    # compares that way: realpath doesn't canonicalize case, so a host that
+    # passed a differently-cased cwd would otherwise produce `../repo/a.py`
+    # and match nothing in the index.
+    rel = os.path.relpath(os.path.realpath(path).lower(),
+                          os.path.realpath(repo).lower())
+    rel = rel.replace(os.sep, "/")
+    if rel in (".", ""):
+        return True  # the repo root — the whole index sits under it
+    if rel in indexed:
+        return True
+    prefix = rel + "/"
+    return any(p.startswith(prefix) for p in indexed)
+
+
 def _resolve(token: str, cwd: str) -> str:
     p = os.path.expanduser(token)
     if not os.path.isabs(p):
@@ -353,10 +416,9 @@ def main() -> None:
 
     if tool_name in _BLOCKED_TOOLS:
         target = _resolve(tool_input.get("path") or cwd, cwd)
-        repo = _repo_containing(target)
-        if repo:
+        if _covers_indexed(target):
             _block(f"the {tool_name} tool")
-        sys.exit(0)  # outside every codecompass repo — no graph to route through
+        sys.exit(0)  # nothing indexed here — no graph answer to route through
 
     if tool_name == "bash":
         command = str(tool_input.get("command", ""))
@@ -371,14 +433,12 @@ def main() -> None:
                 if not os.path.exists(p):
                     continue
                 saw_path = True
-                repo = _repo_containing(p)
-                if repo:
+                if _covers_indexed(p):
                     _block("grep/rg/cat/git grep")
             if not saw_path:  # unparseable — decide by where the agent stands
-                repo = _repo_containing(os.path.realpath(cwd))
-                if repo:
+                if _covers_indexed(os.path.realpath(cwd)):
                     _block("grep/rg/cat/git grep")
-            # every named path is outside all codecompass repos — allow
+            # nothing named touches an indexed file — allow
 
     sys.exit(0)
 
@@ -599,6 +659,47 @@ def _ensure_opencode_config(repo_path: str) -> None:
         f.write("\n")
 
 
+def _write_file_index(repo_path: str, paths) -> None:
+    """Write `.codecompass/files.txt` — every indexed path, one per line.
+
+    The guard hook reads this instead of graph.json: it runs on every Bash/Grep/
+    Glob call, and a few KB of newline-separated paths answers "does the graph
+    cover this?" without parsing a multi-megabyte graph. Written straight after
+    the graph swap so the two never disagree about what is indexed.
+    """
+    index_path = os.path.join(repo_path, ".codecompass", "files.txt")
+    tmp = index_path + ".copy"
+    try:
+        with open(tmp, "w") as f:
+            for rel_path in sorted(paths):
+                f.write(rel_path.replace(os.sep, "/") + "\n")
+        os.replace(tmp, index_path)  # atomic, like the graph swap above
+    except OSError:
+        pass  # no index means the hook allows — never fail an ingest over it
+
+
+def _backfill_file_index(repo_path: str) -> None:
+    """Derive files.txt from an existing graph, for repos ingested before the
+    guard started reading it.
+
+    Without this the guard silently allows everything in every already-indexed
+    repo until its next ingest — quieter, and worse, than the behaviour it
+    replaced. Reads graph.json directly: the hook wants paths, not a client.
+    """
+    compass = os.path.join(repo_path, ".codecompass")
+    index_path = os.path.join(compass, "files.txt")
+    graph_path = os.path.join(compass, "graph.json")
+    if os.path.exists(index_path) or not os.path.exists(graph_path):
+        return
+    try:
+        with open(graph_path) as f:
+            nodes = json.load(f).get("nodes", [])
+    except (OSError, ValueError):
+        return
+    _write_file_index(repo_path, {n["path"] for n in nodes
+                                  if n.get("type") == "File" and n.get("path")})
+
+
 def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None,
                 skip_vectors: bool = False, on_progress=None) -> None:
     """Ingest a codebase into the local code knowledge graph.
@@ -739,6 +840,7 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     final_path = os.path.join(repo_path, ".codecompass", "graph.json")
     os.replace(client.storage_path, final_path)
     client.storage_path = final_path
+    _write_file_index(repo_path, file_id_map)
 
     total_nodes = client.node_count()
     client.close()

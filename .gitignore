@@ -50,3 +50,8 @@ benchmarks/results/*.json
 # CodeCompass vector index payloads (rebuilt on ingest)
 .codecompass/vectors.meta.json
 .codecompass/graph.json
+
+# CodeCompass guard index (rewritten on ingest)
+.codecompass/files.txt
+# CodeCompass half-written guard index
+.codecompass/files.txt.copy
