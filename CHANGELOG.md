@@ -1,5 +1,72 @@
 # Changelog
 
+## [7.0.0] - 2026-07-25
+
+### Changed
+- **`init` is now multi-host.** Generated knowledge lives once in `.agents/`
+  (`codecompass.md` — the canonical instruction block, and
+  `hooks/block-file-search.py` — one guard script); each host gets a thin
+  pointer at its native location: `.claude/CLAUDE.md`, `.pi/SYSTEM.md`,
+  `.opencode/AGENTS.md`, plus the managed block (with the code exploration
+  requirements checklist) in the root `AGENTS.md`. The same guard script
+  serves Claude Code (`.claude/settings.json`, exit 2), pi (pi-hooks extension
+  + `.pi/settings.json`, deny JSON) and opencode (opencode-hooks-api plugin
+  reading the same `.claude/settings.json`). `setup-pi` now also installs
+  `@hsingjui/pi-hooks`; new `codecompass setup-opencode` / `codecompass setup`
+  wire opencode's global config. Stale repos auto-heal on first MCP use,
+  keyed off `.agents/codecompass.md`; pre-7.0 generated files (root
+  `claude.md`, `.pi/agent/AGENTS.md`, `.pi/extensions/codecompass-guard.ts`,
+  `.claude/hooks/`) are migrated away automatically.
+- **Descriptions are node attributes again.** `description.jsonl` is gone:
+  the ingest join already carries node attributes across a rebuild, so the
+  sidecar was a second source of truth for nothing. Pre-7.0 sidecars are
+  adopted onto their nodes on first load, then deleted.
+- **Vector search engine: LanceDB → turbovec.** The `[search]` extra is now
+  `turbovec` + `fastembed` (no pyarrow, no database — a Rust TurboQuant index
+  at `.codecompass/vectors.tvim` plus a JSON payload sidecar). Same lifecycle:
+  wiped and rebuilt at the end of every ingest.
+- **`install.sh` rewritten** as a curl-able, uv-only installer: bootstraps uv
+  (which brings its own managed Python — no system Python or project venv
+  needed), `uv tool install codecompass-mcp`, then `codecompass setup` wires
+  every agent host present. All hosts are pointed at the uv binary
+  (`~/.local/bin/codecompass-mcp`) — `_server_command` prefers it over
+  PATH/venv resolution, so reinstalling into a different environment can't
+  strand an agent on a stale interpreter.
+
+### Added
+- **`delete_entity` / `delete_call`** — the undo for `add_entity` / `add_call`,
+  as MCP tools and `ingestion.agent_writes` functions. `delete_entity` removes
+  an agent-created node outright (edges and description with it); for a
+  parser-produced node it strips only the agent's additions (description,
+  agent_inferred edges/flags), since the node itself would be re-parsed on
+  ingest anyway. `delete_call` removes only agent_inferred edges — parser
+  edges are parser-owned.
+- **`modify_relation`** — retype an existing edge, including a parser edge the
+  parser got wrong (`CALLS` → `INHERITS`, etc.). The retyped edge is marked
+  `agent_relation=True`; on the next ingest join the agent's relation wins for
+  that node pair — the freshly parsed edge of the old type is dropped and the
+  agent's relation restored. MCP tool + `ingestion.agent_writes` function.
+- **Free-form relations.** `add_call`/`delete_call`/`modify_relation` no longer
+  restrict `relation` to CALLS/IMPORTS/INHERITS — the agent names what the
+  code actually does (`DISPATCHES`, `LISTENS_TO`, …), normalized to
+  UPPER_SNAKE. Only the parser-owned structural relations CONTAINS/DEFINED_IN
+  are refused.
+- **First-class ambiguity handling on all four write tools.** A shared name
+  used to mean a flat `skipped`; it now returns `ambiguous` with the candidate
+  list (`id` + `file`), and `add_call`/`delete_call` take `caller_file` /
+  `callee_file` (plus an exact `id` target on `delete_entity`) so the agent
+  can aim at exactly one. `add_entity` no longer silently updates the first
+  of several same-named entities.
+
+### Removed
+- The pi guard extension (superseded by pi-hooks), the LanceDB dependency,
+  and `description.jsonl` (see above).
+
+### Fixed
+- **Guard silently allowed everything when cwd case differed from the
+  registry** (macOS/Windows): repo matching is now case-insensitive.
+- **Tests no longer pollute the real `~/.codecompass/repos` registry.**
+
 ## [6.2.0] - 2026-07-22
 
 ### Added

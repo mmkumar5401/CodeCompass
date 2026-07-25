@@ -24,7 +24,7 @@ def _install(tmp_path, monkeypatch):
     monkeypatch.setattr(pi_setup, "_PI_MCP_CONFIG", tmp_path / "mcp.json")
     monkeypatch.setattr(pi_setup, "_ADAPTER_MCP_CONFIG", tmp_path / "adapter-mcp.json")
     monkeypatch.setattr(pi_setup, "_pi_available", lambda: True)
-    monkeypatch.setattr(pi_setup, "_adapter_installed", lambda: True)
+    monkeypatch.setattr(pi_setup, "_package_installed", lambda name: True)
     return skill_file
 
 
@@ -63,9 +63,12 @@ def test_pre_marker_skill_is_adopted_and_updated(tmp_path, monkeypatch):
 
 def test_mcp_config_points_at_an_absolute_command(tmp_path, monkeypatch):
     """A bare name resolves through PATH/pyenv and can land on a Python that
-    doesn't have codecompass installed — pin the interpreter's own script."""
+    doesn't have codecompass installed — prefer the uv binary, then PATH, then
+    the interpreter's own script."""
     _install(tmp_path, monkeypatch)
     config = tmp_path / "mcp.json"
+    monkeypatch.setenv("HOME", str(tmp_path))  # no uv binary in this home
+    monkeypatch.setattr(pi_setup.shutil, "which", lambda _: None)
 
     script = tmp_path / "codecompass-mcp"
     script.write_text("#!/bin/sh\n")
@@ -94,6 +97,8 @@ def test_adapter_config_is_updated_only_when_it_exists(tmp_path, monkeypatch):
     _install(tmp_path, monkeypatch)
     script = tmp_path / "codecompass-mcp"
     script.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(pi_setup.shutil, "which", lambda _: None)
     monkeypatch.setattr(pi_setup.sys, "executable", str(tmp_path / "python"))
     adapter = tmp_path / "adapter-mcp.json"
 
@@ -111,3 +116,17 @@ def test_no_pi_no_write(tmp_path, monkeypatch):
     monkeypatch.setattr(pi_setup, "_pi_available", lambda: False)
     assert pi_setup.setup_pi(quiet=True) is False
     assert not skill_file.exists()
+
+
+def test_uv_binary_is_the_preferred_server_command(tmp_path, monkeypatch):
+    """install.sh uses `uv tool install`, so ~/.local/bin/codecompass-mcp is
+    the venv-free path every agent host should point at."""
+    _install(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    uv_bin = home / ".local" / "bin"
+    uv_bin.mkdir(parents=True)
+    script = uv_bin / "codecompass-mcp"
+    script.write_text("#!/bin/sh\n")
+    monkeypatch.setenv("HOME", str(home))
+
+    assert pi_setup._server_command() == str(script)

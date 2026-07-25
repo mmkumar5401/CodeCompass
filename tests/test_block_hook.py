@@ -14,7 +14,7 @@ import main as cc_main
 
 
 def _write_hook(tmp_path, repo: str):
-    script = cc_main._CLAUDE_HOOK_SCRIPT.replace(
+    script = cc_main._GUARD_HOOK_SCRIPT.replace(
         "__CODECOMPASS_REPO__", json.dumps(repo))
     hook = tmp_path / "hook.py"
     hook.write_text(script)
@@ -25,6 +25,23 @@ def _run(hook, payload, env):
     return subprocess.run(
         [sys.executable, str(hook)],
         input=json.dumps(payload), capture_output=True, text=True, env=env)
+
+
+def test_hook_matches_repo_case_insensitively(tmp_path):
+    """Hosts pass cwd in whatever case the session started with; on macOS/
+    Windows an exact string match would silently allow everything."""
+    repo = tmp_path / "Repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("x = 1\n")
+    registry = tmp_path / "repos"
+    registry.write_text(str(repo) + "\n")
+    hook = _write_hook(tmp_path, str(repo))
+    env = {**os.environ, "CODECOMPASS_REPOS": str(registry)}
+
+    r = _run(hook, {"tool_name": "Bash",
+                    "tool_input": {"command": "cat a.py"},
+                    "cwd": str(repo).lower()}, env)
+    assert r.returncode == 2
 
 
 def test_hook_blocks_inside_repo_allows_outside(tmp_path):

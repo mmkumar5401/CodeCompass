@@ -325,23 +325,86 @@ def add_entity(name: str, kind: str = "function", file: str = "",
 
 @mcp.tool()
 def add_call(caller: str, callee: str, line: int | None = None,
-             relation: str = "CALLS") -> dict:
+             relation: str = "CALLS", caller_file: str = "",
+             callee_file: str = "") -> dict:
     """Record an edge you spotted in source that the parser missed — a call via
     dynamic dispatch, a callback, string-based lookup, a conditional import, a
     runtime-registered base class.
 
-    relation is CALLS (default), IMPORTS, or INHERITS. Structural edges
-    (CONTAINS/DEFINED_IN) are parser-owned and cannot be added. Both names must
-    resolve unambiguously — ambiguous targets are skipped, never guessed.
-    IMPORTS may target a stdlib or third-party module (`add_call("main",
-    "pathlib", relation="IMPORTS")`); the module node is created if the graph
-    has never seen it. Idempotent: existing edges of the same type are left
-    alone.
+    relation is free-form (CALLS default; IMPORTS, INHERITS, OVERRIDES, …) —
+    only the parser-owned structural relations (CONTAINS/DEFINED_IN) are
+    refused. IMPORTS may target a stdlib or third-party module
+    (`add_call("main", "pathlib", relation="IMPORTS")`); the module node is
+    created if the graph has never seen it. When a name is shared across
+    files, pass caller_file/callee_file to target the right one — an ambiguous
+    name returns the candidates for a precise retry. Idempotent: existing
+    edges of the same type are left alone.
     """
     repo = _active_repo()
     _ensure_initialized(repo)
     from ingestion.agent_writes import add_call as _add
-    return _add(repo, caller, callee, line=line, relation=relation)
+    return _add(repo, caller, callee, line=line, relation=relation,
+                caller_file=caller_file, callee_file=callee_file)
+
+
+@mcp.tool()
+def delete_entity(name: str = "", file: str = "", id: str = "") -> dict:
+    """Remove agent-written knowledge about an entity — the undo for add_entity.
+
+    Target it ONE way: `id` (a node id from grep/impact output) or `name`
+    (+ `file` when the name is shared). A node the agent created is removed
+    outright (edges and description with it). A parser-produced node is
+    parser-owned and kept, but the agent's additions (description,
+    agent_inferred edges) are stripped — deleting the node would be pointless,
+    the next ingest re-parses it. An ambiguous name returns the candidates;
+    retry with file or id.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    from ingestion.agent_writes import delete_entity as _delete
+    return _delete(repo, name, file=file, id=id)
+
+
+@mcp.tool()
+def delete_call(caller: str, callee: str, relation: str = "CALLS",
+                caller_file: str = "", callee_file: str = "") -> dict:
+    """Remove an agent-recorded edge — the undo for add_call. Use when an edge
+    you (or a previous session) recorded turns out to be wrong.
+
+    relation is free-form (CALLS default) — only agent_inferred edges are
+    touched; parser edges are parser-owned and would be re-parsed on ingest
+    anyway (use modify_relation to correct those). Pass
+    caller_file/callee_file when a name is shared — an ambiguous name returns
+    the candidates for a precise retry.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    from ingestion.agent_writes import delete_call as _delete
+    return _delete(repo, caller, callee, relation=relation,
+                   caller_file=caller_file, callee_file=callee_file)
+
+
+@mcp.tool()
+def modify_relation(caller: str, callee: str, to_relation: str,
+                    from_relation: str = "", caller_file: str = "",
+                    callee_file: str = "") -> dict:
+    """Change the relation type on an existing edge — including a parser edge
+    the parser got wrong (it says CALLS, the code actually INHERITS or
+    OVERRIDES). to_relation is free-form (normalized to UPPER_SNAKE); only the
+    parser-owned structural relations CONTAINS/DEFINED_IN are refused.
+
+    The retyped edge wins over the parser on the next ingest: the parser's
+    freshly parsed edge of the old type is dropped and the agent's relation is
+    restored. from_relation narrows which edge to retype when several types
+    link the same pair; omit when only one does. Pass caller_file/callee_file
+    for shared names — ambiguity returns candidates for a precise retry.
+    """
+    repo = _active_repo()
+    _ensure_initialized(repo)
+    from ingestion.agent_writes import modify_relation as _modify
+    return _modify(repo, caller, callee, to_relation=to_relation,
+                   from_relation=from_relation,
+                   caller_file=caller_file, callee_file=callee_file)
 
 
 def main() -> None:

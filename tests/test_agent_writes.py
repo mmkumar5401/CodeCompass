@@ -1,8 +1,9 @@
-"""Agent writes: add_entity/add_call populate the graph, descriptions land in
-the sidecar, ambiguous names are skipped, and all of it survives a re-ingest."""
+"""Agent writes: add_entity/add_call populate the graph, descriptions land on
+the nodes, delete_entity/delete_call undo them, ambiguous names are skipped,
+and all of it survives a re-ingest."""
 
 from graph.code_graph_client import get_client
-from ingestion.agent_writes import add_call, add_entity
+from ingestion.agent_writes import add_call, add_entity, delete_call, delete_entity
 from models.code_types import FileNode
 
 
@@ -49,8 +50,8 @@ def test_add_entity_and_add_call(tmp_path):
     assert node["language"] == "python" and node["kind"] == "function:python"
     # flagged because the parser never produced it: the ingest join re-adds it
     assert node["line"] == 9 and node["agent_created"] is True
-    # the description is NOT a node attribute — it lives in the sidecar
-    assert "description" not in node
+    # the description is a plain node attribute
+    assert node["description"] == "Async helper."
     assert client.describe(r["id"]) == "Async helper."
     client.close()
     # Upsert: same name+file updates instead of duplicating; a blank description
@@ -69,8 +70,11 @@ def test_add_entity_and_add_call(tmp_path):
     # Parser-missed edge: resolvable -> added once, then idempotent
     assert add_call(str(repo_path), "caller", "callee", line=2)["status"] == "added"
     assert add_call(str(repo_path), "caller", "callee")["status"] == "exists"
-    # Ambiguous / unknown names are skipped, never guessed
-    assert add_call(str(repo_path), "caller", "shared")["status"] == "skipped"
+    # Ambiguous names return the candidates so the caller can retry precisely
+    out = add_call(str(repo_path), "caller", "shared")
+    assert out["status"] == "ambiguous" and len(out["candidates"]) == 2
+    assert add_call(str(repo_path), "caller", "shared",
+                    caller_file="", callee_file="src/b.py")["status"] == "added"
     assert add_call(str(repo_path), "ghost", "callee")["status"] == "skipped"
 
     # Non-CALLS relations ride the same tool; CALLS on the same pair already
@@ -90,7 +94,7 @@ def test_add_entity_and_add_call(tmp_path):
     assert add_call(str(repo_path), "caller", "pathlib")["status"] == "skipped"
     # Ambiguity still wins over node creation
     assert add_call(str(repo_path), "caller", "shared",
-                    relation="IMPORTS")["status"] == "skipped"
+                    relation="IMPORTS")["status"] == "ambiguous"
 
     client = get_client(str(repo_path))
     helper_id = next(n for n, a in client.graph.nodes(data=True) if a.get("name") == "helper")
@@ -163,3 +167,153 @@ def test_agent_data_survives_reingest(tmp_path):
     assert any(e.get("type") == "IMPORTS" and e.get("agent_inferred")
                for _, _, e in client.graph.edges(data=True))
     client.close()
+
+
+def test_delete_entity_removes_agent_created_node(tmp_path):
+    repo_path = tmp_path / "demo"
+    _seed(repo_path, "demo")
+
+    r = add_entity(str(repo_path), "ghost", file="src/a.py", description="Phantom.")
+    out = delete_entity(str(repo_path), "ghost")
+    assert out["status"] == "deleted" and out["id"] == r["id"]
+
+    client = get_client(str(repo_path))
+    assert r["id"] not in client.graph
+    client.close()
+
+
+def test_delete_entity_strips_parser_node_but_keeps_it(tmp_path):
+    repo_path = tmp_path / "demo"
+    _seed(repo_path, "demo")
+    callee_id = "demo:callee"
+
+    add_entity(str(repo_path), "callee", file="src/a.py", description="Agent note.")
+    add_call(str(repo_path), "caller", "callee")
+    out = delete_entity(str(repo_path), "callee")
+    assert out["status"] == "stripped"
+
+    client = get_client(str(repo_path))
+    assert callee_id in client.graph  # parser-owned — kept
+    assert client.describe(callee_id) == ""
+    assert not any(e.get("agent_inferred")
+                   for _, _, e in client.graph.edges(data=True))
+    client.close()
+
+
+def test_delete_entity_ambiguous_and_missing(tmp_path):
+    repo_path = tmp_path / "demo"
+    _seed(repo_path, "demo")
+
+    out = delete_entity(str(repo_path), "shared")
+    assert out["status"] == "ambiguous" and len(out["candidates"]) == 2
+    assert delete_entity(str(repo_path), "shared", file="src/b.py")["status"] in (
+        "stripped", "deleted")
+    assert delete_entity(str(repo_path), "nonexistent")["status"] == "not_found"
+
+
+def test_delete_call_removes_only_agent_edges(tmp_path):
+    repo_path = tmp_path / "demo"
+    _seed(repo_path, "demo")
+
+    assert add_call(str(repo_path), "caller", "callee")["status"] == "added"
+    out = delete_call(str(repo_path), "caller", "callee")
+    assert out["status"] == "removed"
+    # second delete: nothing left
+    assert delete_call(str(repo_path), "caller", "callee")["status"] == "not_found"
+    # parser-owned CALLS (caller->callee was seeded in source? no — seed only
+    # adds nodes, so add a parser-style edge explicitly)
+    client = get_client(str(repo_path))
+    client.graph.add_edge("demo:caller", "demo:callee", type="CALLS", resolved=True)
+    client.save()
+    client.close()
+    assert delete_call(str(repo_path), "caller", "callee")["status"] == "skipped"
+    # IMPORTS round-trip
+    assert add_call(str(repo_path), "caller", "pathlib",
+                    relation="IMPORTS")["status"] == "added"
+    assert delete_call(str(repo_path), "caller", "pathlib",
+                       relation="IMPORTS")["status"] == "removed"
+
+
+def test_deleted_agent_node_does_not_come_back_on_ingest(tmp_path):
+    repo_path = tmp_path / "demo"
+    src = repo_path / "src"
+    src.mkdir(parents=True)
+    (src / "a.py").write_text("def caller():\n    return 1\n")
+
+    import main as cc_main
+    cc_main.ingest_code(str(repo_path))
+
+    r = add_entity(str(repo_path), "ghost", file="src/a.py", description="Phantom.")
+    assert delete_entity(str(repo_path), "ghost")["status"] == "deleted"
+
+    cc_main.ingest_code(str(repo_path))
+    client = get_client(str(repo_path))
+    assert r["id"] not in client.graph
+    client.close()
+
+
+def test_free_form_relations(tmp_path):
+    repo_path = tmp_path / "demo"
+    _seed(repo_path, "demo")
+
+    assert add_call(str(repo_path), "caller", "callee",
+                    relation="listens to")["status"] == "added"
+    client = get_client(str(repo_path))
+    types = {e.get("type") for e in
+             client.graph.get_edge_data("demo:caller", "demo:callee").values()}
+    assert "LISTENS_TO" in types
+    client.close()
+    # parser-owned structural relations are still refused
+    assert add_call(str(repo_path), "caller", "callee",
+                    relation="DEFINED_IN")["status"] == "skipped"
+
+
+def test_modify_relation_retypes_and_wins_over_parser_on_ingest(tmp_path):
+    repo_path = tmp_path / "demo"
+    src = repo_path / "src"
+    src.mkdir(parents=True)
+    (src / "a.py").write_text(
+        "class Base:\n    pass\n\n\nclass Child(Base):\n    pass\n")
+
+    import main as cc_main
+    from ingestion.agent_writes import modify_relation
+    cc_main.ingest_code(str(repo_path))
+
+    client = get_client(str(repo_path))
+    child_id = next(n for n, a in client.graph.nodes(data=True) if a.get("name") == "Child")
+    base_id = next(n for n, a in client.graph.nodes(data=True) if a.get("name") == "Base")
+    assert any(e.get("type") == "INHERITS"
+               for e in client.graph.get_edge_data(child_id, base_id, default={}).values())
+    client.close()
+
+    # parser says INHERITS; agent retypes it to something else
+    out = modify_relation(str(repo_path), "Child", "Base", to_relation="registers")
+    assert out["status"] == "modified" and out["to_relation"] == "REGISTERS"
+
+    client = get_client(str(repo_path))
+    types = {e.get("type") for e in client.graph.get_edge_data(child_id, base_id).values()}
+    assert types == {"REGISTERS"}
+    client.close()
+
+    # re-ingest: the parser re-derives INHERITS, but the agent's relation wins
+    cc_main.ingest_code(str(repo_path))
+    client = get_client(str(repo_path))
+    edges = client.graph.get_edge_data(child_id, base_id, default={})
+    types = {e.get("type") for e in edges.values()}
+    assert types == {"REGISTERS"}
+    assert any(e.get("agent_relation") for e in edges.values())
+    client.close()
+
+
+def test_modify_relation_not_found_and_ambiguous(tmp_path):
+    repo_path = tmp_path / "demo"
+    _seed(repo_path, "demo")
+    from ingestion.agent_writes import modify_relation
+
+    assert modify_relation(str(repo_path), "caller", "callee",
+                           to_relation="CALLS")["status"] == "not_found"
+    out = modify_relation(str(repo_path), "caller", "shared", to_relation="CALLS")
+    assert out["status"] == "ambiguous" and out["side"] == "callee"
+    # structural targets refused
+    assert modify_relation(str(repo_path), "caller", "callee",
+                           to_relation="CONTAINS")["status"] == "skipped"

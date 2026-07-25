@@ -1,8 +1,8 @@
 # CodeCompass
 
-A local code knowledge graph that gives AI agents a map of your codebase — so they navigate by structure instead of grepping blind, and know what's connected before they edit. It learns as agents use it: parser misses they record are preserved across re-indexes, and an optional local vector index adds semantic search over everything in the graph.
+A local code knowledge graph that gives AI agents a map of your codebase — so they navigate by structure instead of grepping blind, and know what's connected before they edit. One graph query replaces dozens of file opens: fewer tokens, less compute, and every answer comes with a verifiable `file:line`. And it compounds — descriptions, edges, and corrections agents write back survive re-indexes and persist across sessions, so each task starts from everything every previous session learned instead of from zero.
 
-No cloud. No API keys for core queries. One JSON graph per repo, plus an optional LanceDB vector index. Python, JavaScript/TypeScript, PHP, HTML/CSS.
+No cloud. No API keys for core queries. One JSON graph per repo. Python, JavaScript/TypeScript, PHP, HTML/CSS.
 
 ---
 
@@ -69,10 +69,20 @@ The graph turns navigation into a cheap, deterministic loop:
 ## Install
 
 ```bash
-pip install codecompass-mcp
+curl -fsSL https://raw.githubusercontent.com/mmkumar5401/CodeCompass/main/install.sh | bash
 ```
 
-Gives you the `codecompass` CLI and the `codecompass-mcp` MCP server.
+or `uv tool install codecompass-mcp` (then `codecompass setup` to wire your
+agent hosts). The installer bootstraps uv if missing — it brings its own
+managed Python, so no system Python or project venv is ever touched, and every
+agent host is pointed at the same venv-free binary (`~/.local/bin/codecompass-mcp`).
+Gives you the `codecompass` CLI and the `codecompass-mcp` MCP server, and wires
+every host it finds:
+
+- **pi** — pi-mcp-adapter + pi-hooks extensions, skill, MCP server entry
+- **opencode** — `opencode-hooks-api` plugin + MCP server entry in the global
+  config, so the guard hooks (below) fire there too
+- **Claude Code** — `claude mcp add codecompass -- codecompass-mcp`
 
 ### Index a project
 
@@ -98,8 +108,7 @@ Gitignore-style globs, one per line, `#` starts a comment. A pattern without a
 negation. Applies to `ingest` and `watch` alike.
 
 Worth doing: a mid-size PHP repo whose `vendor/` is indexed spends ~72k of its
-96k entities on Composer packages you will never ask about — and every
-`ingest` re-embeds all of them.
+96k entities on Composer packages you will never ask about.
 
 ### Connect an MCP client
 
@@ -125,9 +134,10 @@ no agent-facing query CLI. `grep`, `impact`, `blast_radius`, `deps`, `flow`,
 ### Semantic search
 
 `grep` finds symbols when you know the name; `search` finds them when you only
-have the idea. It embeds every entity's name/kind/file/description into a local
-LanceDB index (`.codecompass/vectors.lance`) using fastembed's BGE-small model
-— ONNX, CPU-only, no API keys. Opt in with:
+have the idea. It embeds every entity's name/kind/file/description with
+fastembed's BGE-small model (ONNX, CPU-only, no API keys) into a local
+turbovec index (`.codecompass/vectors.tvim` + a JSON payload sidecar) — a Rust
+TurboQuant index, no server, no database. Opt in with:
 
 ```bash
 pip install 'codecompass-mcp[search]'
@@ -145,13 +155,12 @@ is FOR — comes from the agent reading the code and writing it back with
 `add_entity` / `add_call`. There is no bulk enrichment pass and no LLM
 backfill: the graph improves as it gets used, or not at all.
 
-Descriptions live in `.codecompass/description.jsonl`, one
-`{"node": "<id>", "description": "..."}` per line, joined onto every query
-result by node id. Keeping them out of `graph.json` means they survive the
-wholesale rebuild each `ingest` performs (and a deleted `graph.json`), while
-entries whose node vanishes from the source are pruned on the next ingest.
-Agent-written nodes and edges are marked `agent_inferred`; ambiguous call
-targets are skipped, never guessed.
+Descriptions are plain `description` attributes on the graph nodes. The
+`ingest` rebuild carries node attributes from the old graph onto the new one
+(fresh parser values win, and the parser never writes descriptions), so a
+description survives exactly as long as its node does — a deleted or renamed
+symbol takes its description with it. Agent-written nodes and edges are marked
+`agent_inferred`; ambiguous call targets are skipped, never guessed.
 
 ### Flow: `flow` vs `flow-summary`
 
@@ -203,16 +212,19 @@ are language-agnostic.
 ## Navigation guardrail (optional, installed by `init`)
 
 `AGENTS.md` guides any agent through the discover→trace→read→edit loop. For
-Claude Code and [pi](https://pi.dev), `init` also installs a `PreToolUse` hook
-that **blocks code *search*** (`grep`/`rg`, the `Grep`/`Glob` tools) and
-**whole-file `cat` — but only inside a codecompass-registered repo** (tracked in
-`~/.codecompass/repos`, one line per `init`'d project). Reads outside any
-registered repo pass through: no graph exists there, so nothing is blocked.
-**Targeted reads stay free** (the `Read` tool, `sed -n`, `head`/`tail`). The
-point is to change the default reflex to graph-first, not to remove reads.
-Each project's Claude hook lives under its own `.claude/hooks/` with the
-project root baked in — edit or delete it to adjust. Block messages point the
-agent at the codecompass MCP tools (`grep`, `flow`, `impact`, `deps`, …).
+Claude Code, [pi](https://pi.dev), and opencode, `init` also installs a
+`PreToolUse` hook that **blocks code *search*** (`grep`/`rg`, the `Grep`/`Glob`
+tools) and **whole-file `cat` — but only inside a codecompass-registered repo**
+(tracked in `~/.codecompass/repos`, one line per `init`'d project). Reads
+outside any registered repo pass through: no graph exists there, so nothing is
+blocked. **Targeted reads stay free** (the `Read` tool, `sed -n`, `head`/`tail`).
+The point is to change the default reflex to graph-first, not to remove reads.
+One guard script serves all three hosts: it lives at `.agents/hooks/
+block-file-search.py` in each project (Claude reads it via `.claude/settings.json`,
+pi via pi-hooks + `.pi/settings.json`, opencode via the opencode-hooks-api
+plugin reading the same `.claude/settings.json`) — edit or delete it to adjust.
+Block messages point the agent at the codecompass MCP tools (`grep`, `flow`,
+`impact`, `deps`, …).
 
 ---
 
@@ -230,26 +242,20 @@ Source files
    ▼  agent_writes        add_entity / add_call: what the parser can't see,
                           written back by the agent — agent_inferred, preserved
                           across re-ingest
-   ▼  description.jsonl   node id → description, joined onto every result;
-                          outlives the graph rebuild, pruned when a node dies
-   ▼  vector_store        optional: entity embeddings in vectors.lance (LanceDB
-                          + fastembed), wiped & rebuilt on every ingest
 ```
 
-Everything runs locally, in-process. Core queries need no network, no database,
-no API keys; semantic search adds a local vector DB and a one-time model
-download.
+Everything runs locally, in-process — no network, no database, no API keys.
 
 Inside each indexed project:
 
 ```
 your-project/
-├── .codecompass/graph.json           the code knowledge graph (auto-generated)
-├── .codecompass/description.jsonl    agent-written descriptions, keyed by node id
+├── .codecompass/graph.json           the code knowledge graph, descriptions included (auto-generated)
+├── .codecompass/vectors.tvim         semantic search index (optional, rebuilt on ingest)
+├── .codecompass/vectors.meta.json    vector index payloads (optional, rebuilt on ingest)
 ├── .codecompass/overview.md          what this repo is (agent-maintained)
 ├── .codecompass/memory.md            how it's built (agent-maintained)
 ├── .codecompass/learnings.md         what to watch out for (agent-maintained)
-├── .codecompass/vectors.lance/       semantic search index (optional, rebuilt on ingest)
 └── AGENTS.md                         discovery guide for agents (auto-updated)
 ```
 
@@ -259,8 +265,8 @@ your-project/
 
 - **Structure first, semantics layered on** — the parser knows what calls what,
   not what it means. Agents close that gap as they work (`add_entity` /
-  `add_call`, marked `agent_inferred`), and `search` makes the result
-  semantically findable. An unexplored corner of the repo stays undescribed.
+  `add_call`, marked `agent_inferred`). An unexplored corner of the repo
+  stays undescribed.
 - **Static analysis** — dynamic dispatch, reflection, and string-based invocation
   can't be fully resolved. `impact` surfaces those flagged `resolved: false`, and
   `dead_code` results are always candidates to verify.

@@ -1,72 +1,49 @@
 #!/usr/bin/env bash
-set -e
+# CodeCompass installer — safe to pipe from curl:
+#   curl -fsSL https://raw.githubusercontent.com/mmkumar5401/CodeCompass/main/install.sh | bash
+#
+# What it does:
+#   1. installs the codecompass-mcp package with `uv tool install` — uv brings
+#      its own managed Python, so this works with no system Python and never
+#      touches a project venv. If uv is missing it is installed first.
+#   2. runs `codecompass setup`, which wires every agent host present, pointing
+#      them all at the uv binary (~/.local/bin/codecompass-mcp):
+#      - pi:       pi-mcp-adapter + pi-hooks extensions, skill, MCP server entry
+#      - opencode: opencode-hooks-api plugin + MCP server in the global config
+#      Per-project files (AGENTS.md, .agents/, guard hooks) are written by
+#      `init`, which runs automatically the first time the MCP server is used
+#      in a repo.
+set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-cd "$REPO_ROOT"
+PKG="codecompass-mcp"
+UV_BIN="$HOME/.local/bin"
 
-echo "=== CodeCompass setup for opencode ==="
-echo "Tip: pip install codecompass-mcp is the fastest way."
+say()  { printf '→ %s\n' "$*"; }
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-# 1. Python deps
-echo ""
-echo "→ Installing Python dependencies..."
-pip install -e .[dev] -q
-echo "  Dependencies installed (including MCP SDK)."
-
-# 2. .env
-if [ ! -f .env ]; then
-  cp .env.example .env
-  echo "→ Created .env from .env.example"
-  echo "  Edit .env and set your ANTHROPIC_API_KEY and NEO4J_PASSWORD before continuing."
-  echo ""
-  read -rp "  Press Enter once .env is configured, or Ctrl-C to exit..."
-else
-  echo "→ .env already exists, skipping"
+# --- 1. uv -------------------------------------------------------------------
+if ! command -v uv >/dev/null 2>&1; then
+  say "uv not found — installing it (brings its own Python)..."
+  command -v curl >/dev/null 2>&1 || fail "curl not found. Install uv manually: https://docs.astral.sh/uv/"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$UV_BIN:$PATH"
 fi
+command -v uv >/dev/null 2>&1 || fail "uv installation failed."
 
-# 3. Neo4j check
-echo ""
-echo "→ Checking Neo4j connection..."
-python -c "
-import sys, os
-os.chdir('$REPO_ROOT')
-from dotenv import load_dotenv
-load_dotenv(dotenv_path='$REPO_ROOT/.env', override=True)
-from config import neo4j_config
-from neo4j import GraphDatabase
-cfg = neo4j_config()
-try:
-    driver = GraphDatabase.driver(cfg['uri'], auth=(cfg['user'], cfg['password']))
-    driver.verify_connectivity()
-    driver.close()
-    print('  Neo4j is reachable.')
-except Exception as e:
-    print(f'  ERROR: cannot connect to Neo4j — {e}')
-    print('  Start Neo4j and re-run install.sh')
-    sys.exit(1)
-"
+# --- 2. Install the package ---------------------------------------------------
+say "Installing $PKG with uv (isolated, no venvs touched)..."
+uv tool install --force "$PKG"
 
-# 4. Ingest the codebase into the code graph
-echo ""
-echo "→ Ingesting codebase into code graph (project: codecompass)..."
-python -c "from main import ingest_code; ingest_code('.')"
-echo "  Code graph ready."
+CODECOMPASS="$UV_BIN/codecompass"
+[ -x "$CODECOMPASS" ] || fail "$PKG installed but $CODECOMPASS is missing."
 
-# 5. Set up memory files
-echo ""
-echo "→ Setting up memory files..."
-mkdir -p memory
-touch memory/learnings.md
-touch memory/session_log.md
-echo "  memory/ ready."
+# --- 3. Wire agent hosts ------------------------------------------------------
+say "Wiring agent hosts (pi, opencode — whichever is installed)..."
+"$CODECOMPASS" setup
 
-# 6. Generate opencode config via setup
-echo ""
-echo "→ Running codecompass setup..."
-python -m graph.setup
-echo ""
-
-echo "=== Done ==="
-echo ""
-echo "Restart opencode for CodeCompass to take effect."
-echo "Try: opencode"
+echo
+echo "=== CodeCompass installed ==="
+echo "MCP server: $UV_BIN/codecompass-mcp (registered with pi and/or opencode above)"
+echo "Claude Code users: claude mcp add codecompass -- $UV_BIN/codecompass-mcp"
+echo "Make sure $UV_BIN is on your PATH."
+echo "Per-project setup (AGENTS.md, guard hooks) happens automatically on first use."

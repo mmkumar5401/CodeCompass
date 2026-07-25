@@ -36,10 +36,21 @@ _CODECOMPASS_READ_INSTRUCTION = (
     "for discovery and tracing, then read only the specific slices the graph "
     "points you to."
 )
+# One-line pointer every per-agent md file carries, so the full instructions
+# live in exactly one place (.agents/codecompass.md).
+_CODECOMPASS_POINTER = (
+    "Read `.agents/codecompass.md` first — it contains the CodeCompass "
+    "code-graph instructions for this repo."
+)
 
 
 def init_project(repo_path: str) -> None:
-    """Initialize the .codecompass directory in the given repository."""
+    """Initialize codecompass in the given repository.
+
+    Order: .agents/ canonical files first (the single source of truth), then
+    the per-agent md pointers, then the per-agent guards. Everything generated
+    carries a marker so re-init refreshes it; user-authored files are left alone.
+    """
     repo_path = os.path.abspath(repo_path)
     compass_dir = os.path.join(repo_path, ".codecompass")
 
@@ -82,41 +93,108 @@ def init_project(repo_path: str) -> None:
             with open(file_path, "w") as f:
                 f.write(content)
 
-    # ponytail: minimal way to create claude.md in repo root. Existing copies
-    # get their instruction line refreshed so old versions auto-update.
-    claude_md_path = os.path.join(repo_path, "claude.md")
-    if not os.path.exists(claude_md_path):
-        with open(claude_md_path, "w") as f:
-            f.write(f"AGENTS.md\n\n{_CODECOMPASS_READ_INSTRUCTION}\n")
-    else:
-        with open(claude_md_path) as f:
-            claude_md_content = f.read()
-        lines = claude_md_content.splitlines()
-        refreshed = False
-        for i, line in enumerate(lines):
-            if line.startswith("Orient through the code graph first") and line != _CODECOMPASS_READ_INSTRUCTION:
-                lines[i] = _CODECOMPASS_READ_INSTRUCTION
-                refreshed = True
-        if refreshed:
-            with open(claude_md_path, "w") as f:
-                f.write("\n".join(lines) + ("\n" if claude_md_content.endswith("\n") else ""))
-        elif _CODECOMPASS_READ_INSTRUCTION not in claude_md_content:
-            with open(claude_md_path, "a") as f:
-                if claude_md_content and not claude_md_content.endswith("\n"):
-                    f.write("\n")
-                f.write(f"\n{_CODECOMPASS_READ_INSTRUCTION}\n")
-
+    _ensure_agents_dir(repo_path)       # 1. canonical instructions + guard script
+    _ensure_agent_mds(repo_path)        # 2. per-agent md pointers
+    _ensure_claude_settings(repo_path)  # 3a. Claude guard wiring
+    _ensure_pi_settings(repo_path)      # 3b. pi guard wiring (via pi-hooks)
+    _ensure_opencode_config(repo_path)  # 3c. opencode guard (via .claude/settings.json)
     _ensure_gitignore(repo_path)
-    _ensure_claude_hooks(repo_path)
-    _ensure_pi_extension(repo_path)
-    _ensure_pi_agents_md(repo_path)
     _register_repo(repo_path)
     console.print(f"[bold green]Initialized CodeCompass in:[/] {compass_dir}")
+
+
+def _ensure_agents_dir(repo_path: str) -> None:
+    """Write .agents/codecompass.md (the canonical instruction block) and
+    .agents/hooks/block-file-search.py (the guard script every agent's guard
+    wiring points at). Both are fully generated — rewritten on every init."""
+    agents_dir = os.path.join(repo_path, ".agents")
+    hooks_dir = os.path.join(agents_dir, "hooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+
+    with open(os.path.join(agents_dir, "codecompass.md"), "w") as f:
+        f.write(_agents_block() + "\n")
+
+    hook_path = os.path.join(hooks_dir, "block-file-search.py")
+    script = _GUARD_HOOK_SCRIPT.replace(
+        "__CODECOMPASS_REPO__", json.dumps(os.path.abspath(repo_path)))
+    with open(hook_path, "w") as f:
+        f.write(script)
+    os.chmod(hook_path, 0o755)
+
+    # Migrate repos initialized by older versions: the guard script used to
+    # live in .claude/hooks/. Remove that copy if we generated it.
+    old_hook = os.path.join(repo_path, ".claude", "hooks", "block-file-search.py")
+    if os.path.exists(old_hook) and _is_generated(old_hook):
+        os.remove(old_hook)
+
+
+def _write_pointer_md(path: str) -> None:
+    """Write a per-agent md pointer file. Rewrites files we generated (marker
+    or our instruction/pointer lines present); appends the pointer to
+    user-authored files without it; leaves everything else alone."""
+    block = (f"{_GENERATED_MARKER_LINE}\n{_CODECOMPASS_POINTER}\n\n"
+             f"{_CODECOMPASS_READ_INSTRUCTION}\n")
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(block)
+        return
+    with open(path) as f:
+        content = f.read()
+    if content == block:
+        return  # already current — don't churn the file's mtime
+    if _is_generated(path) or _CODECOMPASS_POINTER in content \
+            or _CODECOMPASS_READ_INSTRUCTION in content \
+            or content.startswith("AGENTS.md") \
+            or "See AGENTS.md in the project root" in content:  # legacy pointer
+        with open(path, "w") as f:
+            f.write(block)
+        return
+    with open(path, "a") as f:  # user-authored — append, don't clobber
+        if content and not content.endswith("\n"):
+            f.write("\n")
+        f.write(f"\n{_CODECOMPASS_POINTER}\n")
+
+
+def _ensure_agent_mds(repo_path: str) -> None:
+    """Drop an md pointer into each agent host's native instructions file:
+    .claude/CLAUDE.md (Claude Code), .pi/SYSTEM.md (pi), .opencode/AGENTS.md
+    (opencode) — plus the managed block in the root AGENTS.md every host reads.
+    Old locations from pre-7.0 init are cleaned up when we generated them."""
+    _write_pointer_md(os.path.join(repo_path, ".claude", "CLAUDE.md"))
+    if _pi_installed():
+        _write_pointer_md(os.path.join(repo_path, ".pi", "SYSTEM.md"))
+    if _opencode_installed():
+        _write_pointer_md(os.path.join(repo_path, ".opencode", "AGENTS.md"))
     _register_project_agents_md(repo_path)
+
+    for legacy in (os.path.join(repo_path, "claude.md"),
+                   os.path.join(repo_path, ".pi", "agent", "AGENTS.md"),
+                   os.path.join(repo_path, ".claude", "claude.md"),
+                   os.path.join(repo_path, ".pi", "system.md"),
+                   os.path.join(repo_path, ".opencode", "agents.md")):
+        # Case-insensitive filesystems (macOS/Windows) report the lowercase
+        # legacy name as existing when only the uppercase replacement does —
+        # listdir tells them apart, so we never delete the file we just wrote.
+        parent, name = os.path.split(legacy)
+        try:
+            exact_case_exists = name in os.listdir(parent)
+        except OSError:
+            continue
+        if not exact_case_exists:
+            continue
+        with open(legacy) as f:
+            legacy_content = f.read()
+        if (_is_generated(legacy)
+                or "See AGENTS.md in the project root" in legacy_content
+                or legacy_content.startswith("AGENTS.md")
+                or _CODECOMPASS_READ_INSTRUCTION in legacy_content):
+            os.remove(legacy)
 
 
 _GITIGNORE_ENTRIES = [
-    (".codecompass/vectors.lance/", "# CodeCompass vector index (rebuilt on ingest)"),
+    (".codecompass/vectors.tvim", "# CodeCompass vector index (rebuilt on ingest)"),
+    (".codecompass/vectors.meta.json", "# CodeCompass vector index payloads (rebuilt on ingest)"),
     (".codecompass/graph.json.copy", "# CodeCompass half-built graph from an interrupted ingest"),
 ]
 
@@ -174,7 +252,7 @@ def _ensure_gitignore(repo_path: str) -> None:
 # text search (grep/rg and the Grep/Glob tools) is blocked. Whole-file `cat` is
 # blocked too: read targeted slices with the Read tool (or sed -n/head/tail)
 # once you know what to open.
-_CLAUDE_HOOK_SCRIPT = r'''#!/usr/bin/env python3
+_GUARD_HOOK_SCRIPT = r'''#!/usr/bin/env python3
 """PreToolUse hook: block code search and whole-file dumps INSIDE codecompass
 projects; allow reads outside any registered repo (no graph exists there).
 
@@ -191,7 +269,7 @@ _REPO = __CODECOMPASS_REPO__
 _REGISTRY = os.environ.get(
     "CODECOMPASS_REPOS", os.path.expanduser("~/.codecompass/repos"))
 
-_BLOCKED_TOOLS = {"Grep", "Glob"}
+_BLOCKED_TOOLS = {"grep", "glob"}
 # Word-boundary match anywhere in the command: catches `grep foo`,
 # `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
 # (?![\w-]) keeps the bare-`cat` rule off hyphenated names; git's own
@@ -214,9 +292,16 @@ def _repos() -> list:
 
 
 def _repo_containing(path: str):
-    """The registered codecompass repo containing path, or None."""
+    """The registered codecompass repo containing path, or None.
+
+    Compared case-insensitively: macOS/Windows filesystems don't distinguish
+    case, and hosts pass cwd in whatever case the session was started with,
+    so an exact string match can silently miss the repo we're standing in.
+    """
+    npath = os.path.realpath(path).lower()
     for repo in _repos():
-        if path == repo or path.startswith(repo + os.sep):
+        nrepo = os.path.realpath(repo).lower()
+        if npath == nrepo or npath.startswith(nrepo + os.sep):
             return repo
     return None
 
@@ -229,19 +314,26 @@ def _resolve(token: str, cwd: str) -> str:
 
 
 def _block(what: str) -> None:
-    print(
+    reason = (
         f"Don't use {what}. Discover through the codecompass MCP tools — "
         "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — "
         "then read the specific slice you need with the Read tool (or "
-        "`sed -n`/`head`/`tail`), not a whole-file dump.",
-        file=sys.stderr,
+        "`sed -n`/`head`/`tail`), not a whole-file dump."
     )
+    # One block signal per host: Claude Code blocks on exit code 2 and shows
+    # stderr; pi (via pi-hooks) parses the deny JSON from stdout.
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}))
+    print(reason, file=sys.stderr)
     sys.exit(2)
 
 
 def main() -> None:
     payload = json.load(sys.stdin)
-    tool_name = payload.get("tool_name", "")
+    tool_name = payload.get("tool_name", "").lower()  # Claude: Bash/Grep; pi: bash/grep
     tool_input = payload.get("tool_input", {}) or {}
     cwd = payload.get("cwd") or os.getcwd()
 
@@ -252,7 +344,7 @@ def main() -> None:
             _block(f"the {tool_name} tool")
         sys.exit(0)  # outside every codecompass repo — no graph to route through
 
-    if tool_name == "Bash":
+    if tool_name == "bash":
         command = str(tool_input.get("command", ""))
         if _BLOCKED_SHELL_RE.search(command):
             saw_path = False
@@ -281,13 +373,25 @@ if __name__ == "__main__":
     main()
 '''
 
-# Tool names that should route through the block-file-search hook.
-_CLAUDE_HOOK_MATCHERS = ("Bash", "Grep", "Glob")
-# $CLAUDE_PROJECT_DIR resolves to the project root, not the agent's cwd.
-_CLAUDE_HOOK_COMMAND = 'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-search.py"'
-_OLD_CLAUDE_HOOK_COMMAND = "python3 .claude/hooks/block-file-search.py"
+# Tool names that should route through the block-file-search hook. Matchers are
+# regexes covering both hosts of this settings file: Claude Code tools are
+# capitalized (Bash/Grep/Glob); opencode (via opencode-hooks-api, which reads
+# this same file) uses lowercase (bash/grep/glob).
+_CLAUDE_HOOK_MATCHERS = ("^(Bash|bash)$", "^(Grep|grep)$", "^(Glob|glob)$")
+_LEGACY_CLAUDE_MATCHERS = {"Bash": "^(Bash|bash)$", "Grep": "^(Grep|grep)$",
+                           "Glob": "^(Glob|glob)$"}
+# $CLAUDE_PROJECT_DIR resolves to the project root under Claude Code (cwd may
+# be a subdirectory); opencode-hooks-api doesn't set it but runs commands from
+# the project root, so the :- fallback covers both.
+_CLAUDE_HOOK_COMMAND = 'python3 "${CLAUDE_PROJECT_DIR:-.}/.agents/hooks/block-file-search.py"'
+_LEGACY_CLAUDE_HOOK_COMMANDS = (
+    "python3 .claude/hooks/block-file-search.py",
+    'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-search.py"',
+    'python3 "$CLAUDE_PROJECT_DIR/.agents/hooks/block-file-search.py"',
+)
 
 
+_GENERATED_MARKER_LINE = "<!-- Installed by `codecompass init` — rewritten on every init. -->"
 _GENERATED_MARKERS = ("Installed by `codecompass init`",
                       "Installed by the codecompass `init` tool")
 
@@ -304,25 +408,15 @@ def _is_generated(path: str) -> bool:
     return any(m in content for m in _GENERATED_MARKERS)
 
 
-def _ensure_claude_hooks(repo_path: str) -> None:
-    """Install the codecompass PreToolUse guardrail into the repo's .claude/ config.
+def _ensure_claude_settings(repo_path: str) -> None:
+    """Wire the Claude Code PreToolUse guardrail into .claude/settings.json.
 
-    Writes .claude/hooks/block-file-search.py, rewriting any copy init previously
-    installed (marker-bearing) so old versions auto-update. Merges the PreToolUse
-    matchers into .claude/settings.json without clobbering any hooks the user
-    already configured.
+    The guard script itself lives in .agents/hooks/ (written by
+    _ensure_agents_dir); this only merges the PreToolUse matchers, migrating
+    legacy command paths and never clobbering hooks the user configured.
     """
     claude_dir = os.path.join(repo_path, ".claude")
-    hooks_dir = os.path.join(claude_dir, "hooks")
-    os.makedirs(hooks_dir, exist_ok=True)
-
-    hook_path = os.path.join(hooks_dir, "block-file-search.py")
-    script = _CLAUDE_HOOK_SCRIPT.replace(
-        "__CODECOMPASS_REPO__", json.dumps(os.path.abspath(repo_path)))
-    if not os.path.exists(hook_path) or _is_generated(hook_path):
-        with open(hook_path, "w") as f:
-            f.write(script)
-        os.chmod(hook_path, 0o755)
+    os.makedirs(claude_dir, exist_ok=True)
 
     settings_path = os.path.join(claude_dir, "settings.json")
     settings: dict = {}
@@ -341,6 +435,12 @@ def _ensure_claude_hooks(repo_path: str) -> None:
     pre = hooks.setdefault("PreToolUse", [])
 
     changed = False
+    for entry in pre:  # migrate OUR legacy entries (exact matcher + our script)
+        legacy = _LEGACY_CLAUDE_MATCHERS.get(entry.get("matcher"))
+        if legacy and any("block-file-search.py" in str(h.get("command", ""))
+                          for h in entry.get("hooks", [])):
+            entry["matcher"] = legacy
+            changed = True
     for matcher in _CLAUDE_HOOK_MATCHERS:
         entry = next((e for e in pre if e.get("matcher") == matcher), None)
         if entry is None:
@@ -351,8 +451,8 @@ def _ensure_claude_hooks(repo_path: str) -> None:
             changed = True
             continue
         entry_hooks = entry.setdefault("hooks", [])
-        for h in entry_hooks:  # migrate pre-$CLAUDE_PROJECT_DIR command paths
-            if h.get("command") == _OLD_CLAUDE_HOOK_COMMAND:
+        for h in entry_hooks:  # migrate legacy command paths
+            if h.get("command") in _LEGACY_CLAUDE_HOOK_COMMANDS:
                 h["command"] = _CLAUDE_HOOK_COMMAND
                 changed = True
         if not any(h.get("command") == _CLAUDE_HOOK_COMMAND for h in entry_hooks):
@@ -363,48 +463,6 @@ def _ensure_claude_hooks(repo_path: str) -> None:
         with open(settings_path, "w") as f:
             json.dump(settings, f, indent=2)
             f.write("\n")
-
-
-# pi has no settings-level tool guard, only extensions can veto a tool call.
-# This is the pi analog of the Claude PreToolUse hook: dropped into the repo's
-# .pi/extensions/, it loads only in this trusted project, so it blocks
-# unconditionally here — no repo registry needed, placement scopes it.
-# ponytail: blocks any grep/rg/cat while working in this project, even against a
-# path outside the repo. Add path-scoping like the Claude hook if that bites.
-_PI_GUARD_EXT = r'''// Installed by the codecompass `init` tool into .pi/extensions/.
-// Blocks raw text search (grep/rg) and whole-file dumps (cat) so discovery
-// routes through the codecompass graph. Loads only in this trusted project.
-// Safe to edit — init only rewrites copies that carry this marker.
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
-// Word-boundary match anywhere in the command: catches `grep foo`,
-// `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
-// (?![\w-]) avoids false positives like `git cat-file`.
-// git's own search/dump is blocked too: `git grep`, `git log -S/-G`, `git ls-files`, `git cat-file`.
-const BLOCKED_SHELL_RE =
-  /\b(?:grep|rg|cat)\b(?![\w-])|\bgit\b[^|;&]*?\s(?:grep|ls-files|cat-file)\b|\bgit\b[^|;&]*?\slog\b[^|;&]*?\s-[SG]/;
-
-const REASON =
-  "Don't grep/cat/rg (or `git grep`) the repo. Discover through the codecompass MCP tools — " +
-  "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — " +
-  "then read the specific slice with the Read tool (or sed -n/head/tail), " +
-  "not a whole-file dump.";
-
-export default function (pi: ExtensionAPI) {
-  pi.on("tool_call", async (event) => {
-    if (event.toolName === "grep") {
-      return { block: true, reason: REASON };
-    }
-    if (event.toolName === "bash") {
-      const command = String((event.input as { command?: string }).command ?? "");
-      if (BLOCKED_SHELL_RE.test(command)) {
-        return { block: true, reason: REASON };
-      }
-    }
-    return undefined;
-  });
-}
-'''
 
 
 def _pi_installed() -> bool:
@@ -419,41 +477,112 @@ def _pi_installed() -> bool:
             or os.path.isdir(os.path.join(os.path.expanduser("~"), ".pi")))
 
 
-def _ensure_pi_extension(repo_path: str) -> None:
-    """Drop the pi guard extension into <repo>/.pi/extensions/ so pi blocks
-    grep/cat/rg the same way the Claude hook does. No-op when pi is not
-    installed. Rewrites copies init previously installed so old versions
-    auto-update; leaves user-authored extensions alone."""
-    if not _pi_installed():
-        return
-    ext_dir = os.path.join(repo_path, ".pi", "extensions")
-    ext_path = os.path.join(ext_dir, "codecompass-guard.ts")
-    if os.path.exists(ext_path) and not _is_generated(ext_path):
-        return
-    os.makedirs(ext_dir, exist_ok=True)
-    with open(ext_path, "w") as f:
-        f.write(_PI_GUARD_EXT)
+# pi runs Claude Code-compatible command hooks through the pi-hooks extension
+# (installed globally by setup-pi), so the SAME guard script serves both hosts.
+# Differences from Claude's wiring: matchers are a single regex against pi's
+# lowercase tool names, and there is no $CLAUDE_PROJECT_DIR — the command path
+# is baked in absolute. Hook commands run in the session cwd.
+_PI_HOOK_MATCHER = "^(bash|grep|glob)$"
 
 
-def _ensure_pi_agents_md(repo_path: str) -> None:
-    """Drop .pi/agent/AGENTS.md pointing at the root AGENTS.md so pi picks up
-    the CodeCompass instructions. No-op when pi is not installed. Rewrites
-    copies init previously installed so old versions auto-update."""
+def _pi_hook_command(repo_path: str) -> str:
+    script = os.path.join(os.path.abspath(repo_path), ".agents", "hooks",
+                          "block-file-search.py")
+    return f'python3 "{script}"'
+
+
+def _ensure_pi_settings(repo_path: str) -> None:
+    """Wire the PreToolUse guardrail into the repo's .pi/settings.json for the
+    pi-hooks extension, merging without clobbering user hooks. No-op when pi is
+    not installed. Also removes the retired .pi/extensions/ guard (pre-7.0)
+    if we generated it."""
     if not _pi_installed():
         return
-    agents_path = os.path.join(repo_path, ".pi", "agent", "AGENTS.md")
-    if os.path.exists(agents_path):
-        with open(agents_path) as f:
-            existing = f.read()
-        if not (_is_generated(agents_path) or "See AGENTS.md in the project root" in existing):
-            return  # user-authored — leave it alone
-    os.makedirs(os.path.dirname(agents_path), exist_ok=True)
-    with open(agents_path, "w") as f:
-        f.write(
-            "<!-- Installed by the codecompass `init` tool — rewritten on every init. -->\n"
-            "See AGENTS.md in the project root — it contains the CodeCompass "
-            "code-graph instructions for this repo.\n"
-        )
+
+    old_ext = os.path.join(repo_path, ".pi", "extensions", "codecompass-guard.ts")
+    if os.path.exists(old_ext) and _is_generated(old_ext):
+        os.remove(old_ext)
+
+    settings_path = os.path.join(repo_path, ".pi", "settings.json")
+    settings: dict = {}
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path) as f:
+                settings = json.load(f) or {}
+        except (json.JSONDecodeError, ValueError):
+            console.print(
+                f"[yellow]Could not parse {settings_path}; leaving it untouched. "
+                "Add the codecompass PreToolUse hook manually.[/]"
+            )
+            return
+
+    command = _pi_hook_command(repo_path)
+    before = json.dumps(settings, sort_keys=True)
+    hooks = settings.setdefault("hooks", {})
+    pre = hooks.setdefault("PreToolUse", [])
+    entry = next((e for e in pre if e.get("matcher") == _PI_HOOK_MATCHER), None)
+    if entry is None:
+        pre.append({
+            "matcher": _PI_HOOK_MATCHER,
+            "hooks": [{"type": "command", "command": command}],
+        })
+    else:
+        entry_hooks = entry.setdefault("hooks", [])
+        changed_cmd = False
+        for h in entry_hooks:  # repo moved → baked-in absolute path is stale
+            if "block-file-search.py" in str(h.get("command", "")):
+                if h["command"] != command:
+                    h["command"] = command
+                changed_cmd = True
+        if not changed_cmd:
+            entry_hooks.append({"type": "command", "command": command})
+
+    if json.dumps(settings, sort_keys=True) == before:
+        return  # already current — don't churn the file's mtime
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+
+
+def _opencode_installed() -> bool:
+    """True if opencode is on this machine — same reasoning as _pi_installed:
+    PATH is unreliable when opencode spawned this process."""
+    return (shutil.which("opencode") is not None
+            or os.path.isdir(os.path.join(os.path.expanduser("~"), ".config", "opencode")))
+
+
+# opencode runs Claude Code hooks through the opencode-hooks-api plugin, which
+# reads the SAME .claude/settings.json init already writes — so the guard needs
+# no opencode-specific hook file, only the plugin registered in opencode.json.
+_OPENCODE_HOOKS_PLUGIN = "opencode-hooks-api"
+
+
+def _ensure_opencode_config(repo_path: str) -> None:
+    """Register the opencode-hooks-api plugin in the repo's opencode.json so the
+    .claude/settings.json guard fires in opencode too. No-op when opencode is
+    not installed; preserves any plugins the user already listed."""
+    if not _opencode_installed():
+        return
+    config_path = os.path.join(repo_path, "opencode.json")
+    config: dict = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path) as f:
+                config = json.load(f) or {}
+        except (json.JSONDecodeError, ValueError):
+            console.print(
+                f"[yellow]Could not parse {config_path}; leaving it untouched. "
+                f'Add "{_OPENCODE_HOOKS_PLUGIN}" to its plugin list manually.[/]'
+            )
+            return
+    plugins = config.setdefault("plugin", [])
+    if _OPENCODE_HOOKS_PLUGIN in plugins:
+        return
+    plugins.append(_OPENCODE_HOOKS_PLUGIN)
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
 
 
 def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None,
@@ -495,7 +624,6 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
 
     client = get_client(repo_path, "graph.json.copy")
     client.graph.clear()  # a stale copy from an interrupted run
-    client.sync_descriptions = False  # sidecar is written once, at the join
 
     console.print("[dim]Phase 1/4 — Building hierarchy…[/]")
     _report(2, "Building hierarchy…")
@@ -581,18 +709,22 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
     for u, v, e in agent_edges:  # edges to dropped nodes die with them
         if u in client.graph and v in client.graph:
             client.graph.add_edge(u, v, **e)
-    dropped = client.prune_descriptions()
+    # Agent-set relations (modify_relation) win over the parser's: for each
+    # overridden pair, drop the freshly parsed edges of any other type. The
+    # agent's edge itself was already restored by the loop above.
+    for u, v, e in agent_edges:
+        if not e.get("agent_relation") or u not in client.graph or v not in client.graph:
+            continue
+        for k, ne in list(client.graph.get_edge_data(u, v, default={}).items()):
+            if ne.get("type") != e.get("type"):
+                client.graph.remove_edge(u, v, k)
 
     # Swap the copy in. os.replace is atomic, so a reader sees either the old
     # graph or the new one, never a truncated file.
-    client.sync_descriptions = True  # the one sidecar write of the whole ingest
     client.save()
     final_path = os.path.join(repo_path, ".codecompass", "graph.json")
     os.replace(client.storage_path, final_path)
     client.storage_path = final_path
-
-    if dropped:
-        console.print(f"[dim]  {dropped} description(s) dropped — node gone from source[/]")
 
     total_nodes = client.node_count()
     client.close()
@@ -631,6 +763,16 @@ def _agents_block() -> str:
 
 **{_CODECOMPASS_READ_INSTRUCTION}**
 
+**What's in it for you:** every file you open to "find your way" burns context
+you needed for the actual task. One `grep`/`impact`/`flow` call replaces
+dozens of those opens — you finish in fewer turns, with budget left over, and
+every answer carries a `file:line` you can verify instead of a guess you'll
+have to defend. And the graph is *yours*: the descriptions, edges, and fixes
+you write back survive this session. Next session — yours or another agent's
+— starts from everything you learned instead of from zero. The agents that
+use it look fast and certain; the ones that don't re-read the same files
+every session and call it progress.
+
 This project has a CodeCompass code knowledge graph at `.codecompass/graph.json`,
 queried through the codecompass MCP tools — there is no CLI for agents. The
 server defaults to the current directory; call `set_repo` to point it elsewhere.
@@ -654,12 +796,20 @@ So while you explore, write back what you learn, in the same turn you learn it:
 - Read a call the graph doesn't show (dynamic dispatch, a callback, a handler
   wired up at runtime) → `add_call(caller, callee, line)`. Same tool for a
   missed import or base class: `add_call(a, b, relation="IMPORTS")` /
-  `relation="INHERITS"`. IMPORTS may target a stdlib or third-party module
-  (`add_call("main", "pathlib", relation="IMPORTS")`).
+  `relation="INHERITS"`. relation is free-form — name what the code actually
+  does (`DISPATCHES`, `LISTENS_TO`, …).
+- An edge with the WRONG relation (parser said `CALLS`, the code actually
+  `INHERITS`) → `modify_relation(caller, callee, to_relation=...)`; your
+  relation wins over the parser's from the next ingest on.
+- Recorded something that turns out to be wrong → `delete_call` (wrong edge) /
+  `delete_entity` (wrong or obsolete agent node). Parser-owned nodes/edges
+  can't be deleted — the parser would restore them anyway — but the agent's
+  additions on them are stripped.
 
-Both tools skip ambiguous names rather than guess, so a wrong attempt costs
-nothing but a `skipped` status. A fact you postpone is a fact the next session
-pays to re-derive.
+All four tools handle ambiguity: a shared name returns `ambiguous` plus the
+candidate list (`id` + `file`) — retry with `file` (or `id` for
+`delete_entity`) to target exactly one. A fact you postpone is a fact the next
+session pays to re-derive.
 
 **And keep the graph current: after ANY code change — edits, additions,
 deletions, renames, refactors — call `ingest`.** A stale graph is worse than no
@@ -696,9 +846,8 @@ on the way in, not someday.
 
 | File | What it holds | Who writes it |
 |---|---|---|
-| `.codecompass/graph.json` | nodes (entities, files, folders) + edges (CALLS / IMPORTS / INHERITS / CONTAINS). Nodes carry `name`, `kind` (`function:python`), `file`, `line` — **no description** | the parser. Each `ingest` builds a fresh graph and swaps it in, then joins the old one onto it by node id: a symbol the parser no longer produces is dropped (deleted or renamed in source), while your `add_entity` nodes and `add_call` edges are carried over — flagged `agent_created` / `agent_inferred`, which is how the join tells them from code you deleted |
-| `.codecompass/description.jsonl` | one `{{"node": "<node id>", "description": "..."}}` per line — the sole home of descriptions, joined onto results by node id at read time | you, via `add_entity`. Survives the rebuild (and a deleted `graph.json`) because the parser never writes it. Entries whose node the new parse doesn't contain are pruned |
-| `.codecompass/vectors.lance/` | embedded `kind + name + file + description` per entity, for `search` | rebuilt from the graph + descriptions at the end of every `ingest`. **It is a snapshot**: descriptions you add now are not searchable until the next `ingest` |
+| `.codecompass/graph.json` | nodes (entities, files, folders) + edges (CALLS / IMPORTS / INHERITS / CONTAINS). Nodes carry `name`, `kind` (`function:python`), `file`, `line`, and your `description` | the parser, and you. Each `ingest` builds a fresh graph and swaps it in, then joins the old one onto it by node id: a symbol the parser no longer produces is dropped (deleted or renamed in source — its description dies with it), while surviving nodes keep your descriptions and your `add_entity` nodes / `add_call` edges are carried over — flagged `agent_created` / `agent_inferred`, which is how the join tells them from code you deleted |
+| `.codecompass/vectors.tvim` + `vectors.meta.json` | embedded `kind + name + file + description` per entity, for `search` | rebuilt from the graph + descriptions at the end of every `ingest`. **It is a snapshot**: descriptions you add now are not searchable until the next `ingest` |
 | `.codecompass/overview.md`, `memory.md`, `learnings.md` | prose context (see Priority 1) | you |
 
 ### The MCP tools
@@ -711,7 +860,7 @@ makes sense, and returns a `description` on each entity row.
 | Tool | In | Out | Use when |
 |---|---|---|---|
 | `grep` | `pattern` (Python regex), `field` (`all`\\|`name`\\|`file`\\|`kind`\\|`description`), `ignore_case`, `limit` | matching entities: `name`, `kind`, `file`, `line`, `description`, `matched_field`, `match` | you have a name, a pattern, or a word you expect in a description (`^test_`, `.*Adapter$`, `handle\\|dispatch`) |
-| `search` | `query`, `limit` | entities by semantic distance: `name`, `kind`, `file`, `line`, `description`, `distance` | you have an idea, not a name ("where does session timeout live?"). Needs the optional `search` extra and an `ingest` to build the index |
+| `search` | `query`, `limit` | entities by semantic similarity: `name`, `kind`, `file`, `line`, `description`, `score` | you have an idea, not a name ("where does session timeout live?"). Needs the optional `search` extra and an `ingest` to build the index |
 | `tree` | — | full Project → Folder → File hierarchy | you need the layout. Large — read it in slices |
 
 **Trace — you have a symbol or file**
@@ -732,15 +881,18 @@ makes sense, and returns a `description` on each entity row.
 
 | Tool | In | Out |
 |---|---|---|
-| `add_entity` | `name`, `kind`, `file`, `line`, `description`, `language` | `created`/`updated` + node id. Description goes to `description.jsonl`; language is inferred from the extension |
-| `add_call` | `caller`, `callee`, `line`, `relation` (`CALLS`\\|`IMPORTS`\\|`INHERITS`) | `added`/`exists`/`skipped` (+ reason). Structural edges are parser-owned and refused |
+| `add_entity` | `name`, `kind`, `file`, `line`, `description`, `language` | `created`/`updated` + node id. Description goes on the node; language is inferred from the extension |
+| `add_call` | `caller`, `callee`, `line`, `relation` (free-form, default `CALLS`), `caller_file`, `callee_file` | `added`/`exists`/`ambiguous` (+ candidates) / `skipped`. Only parser-owned `CONTAINS`/`DEFINED_IN` are refused |
+| `modify_relation` | `caller`, `callee`, `to_relation`, `from_relation`, `caller_file`, `callee_file` | `modified` / `not_found` / `ambiguous`. Retypes an edge — even a parser edge the parser got wrong; the agent's relation wins on the next ingest |
+| `delete_entity` | `name` or `id`, `file` | `deleted` (agent-created node) / `stripped` (parser node — agent additions removed) / `ambiguous` (+ candidates) / `not_found` |
+| `delete_call` | `caller`, `callee`, `relation`, `caller_file`, `callee_file` | `removed` / `ambiguous` (+ candidates) / `not_found` / `skipped`. Only agent_inferred edges — parser edges would be re-parsed anyway |
 
 **Manage**
 
 | Tool | In | Out |
 |---|---|---|
-| `ingest` | `normalize`, `dump_triples` | rebuilds the graph + vector index, reporting progress |
-| `init` | — | (re)creates `.codecompass/`, hooks, and this AGENTS.md block |
+| `ingest` | `normalize`, `dump_triples`, `skip_vectors` | rebuilds the graph (+ vector index unless skipped), reporting progress |
+| `init` | — | (re)creates `.codecompass/`, `.agents/`, guard hooks, and the per-agent md pointers |
 | `set_repo` / `get_repo` | `repo_path` / — | switch or report the active repo |
 
 ### The loop
@@ -774,23 +926,48 @@ structure or relationships, use the graph.
 
 
 def agents_md_is_current(repo_path: str) -> bool:
-    """True if the project's AGENTS.md already carries THIS version's block.
+    """True if the project's .agents/codecompass.md matches THIS version's block.
 
     A repo initialized by an older codecompass keeps working — its .codecompass/
     exists, so nothing re-runs init — and silently misses every generated file a
-    later version added. This is the cheap staleness check that lets the server
-    heal such a repo on first use.
+    later version added. The canonical block is the version signal that lets the
+    server heal such a repo on first use.
     """
     try:
-        with open(os.path.join(repo_path, "AGENTS.md")) as f:
-            return _agents_block() in f.read()
+        with open(os.path.join(repo_path, ".agents", "codecompass.md")) as f:
+            return f.read() == _agents_block() + "\n"
     except OSError:
         return False
 
 
+def _agents_md_pointer_block() -> str:
+    """The managed block in the project's root AGENTS.md: the exploration
+    contract, plus a pointer to the canonical instructions in
+    .agents/codecompass.md."""
+    return f"""{_CODECOMPASS_START}
+## Code graph
+
+**{_CODECOMPASS_READ_INSTRUCTION}**
+
+{_CODECOMPASS_POINTER}
+
+Every file you open to orient burns context you needed for the task. A graph
+query costs a few tokens and answers with a `file:line` you can verify — and
+what you write back today is still here for your next session.
+
+### Code exploration requirements
+
+- [ ] Explore only through the codecompass tools — `grep`/`search`/`tree` to discover, `flow`/`deps` to understand. Never `grep`/`cat`/`rg` the repo directly.
+- [ ] Trace the `flow` of every code path you are about to touch BEFORE editing.
+- [ ] Run `impact`/`blast_radius` on every symbol and file you will change — before the edit, and again after to confirm the actual fallout.
+- [ ] Graph missing something or wrong? Fix it the moment you notice: `add_entity` / `add_call`.
+- [ ] `ingest` after every edit session, then flush what you learned into the graph with `add_entity` / `add_call`.
+{_CODECOMPASS_END}"""
+
+
 def _register_project_agents_md(repo_path: str) -> None:
-    """Write or update the Code graph section in the project's AGENTS.md."""
-    block = _agents_block()
+    """Write or update the Code graph pointer section in the project's AGENTS.md."""
+    block = _agents_md_pointer_block()
     agents_md_path = os.path.join(repo_path, "AGENTS.md")
 
     if os.path.exists(agents_md_path):
@@ -875,9 +1052,16 @@ def main():
     p_mcp.add_argument("repo_path", nargs="?", default=".")
 
     p_setup_pi = subparsers.add_parser(
-        "setup-pi", help="Wire CodeCompass into pi (skill + pi-mcp-adapter + mcp.json)")
+        "setup-pi", help="Wire CodeCompass into pi (skill + pi-mcp-adapter + pi-hooks + mcp.json)")
     p_setup_pi.add_argument("--force", action="store_true",
                             help="Re-copy skill and config even if already set up")
+
+    subparsers.add_parser(
+        "setup-opencode",
+        help="Wire CodeCompass into opencode (opencode-hooks-api plugin + MCP server)")
+
+    subparsers.add_parser(
+        "setup", help="Wire CodeCompass into every agent host present (pi, opencode)")
 
     args = parser.parse_args()
 
@@ -890,8 +1074,22 @@ def main():
         setup_pi(force=args.force)
         return
 
+    if args.command == "setup-opencode":
+        from opencode_setup import setup_opencode
+        setup_opencode()
+        return
+
+    if args.command == "setup":
+        from pi_setup import setup_pi
+        from opencode_setup import setup_opencode
+        setup_pi()
+        setup_opencode()
+        return
+
     from pi_setup import auto_setup_pi
     auto_setup_pi()
+    from opencode_setup import auto_setup_opencode
+    auto_setup_opencode()
 
     if args.command == "load-triples":
         load_triples(args.triples_file, args.repo_path)

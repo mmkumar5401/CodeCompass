@@ -37,50 +37,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# Descriptions do NOT live on the graph nodes. graph.json is parser output,
-# rebuilt from scratch on every ingest; a description is the one thing in the
-# graph no parser can regenerate, so it lives in its own sidecar keyed by node
-# id and is joined back on read. One {"node", "description"} object per line —
-# line-diffable, greppable, and survives a deleted or corrupt graph.json.
+# Descriptions live ON the graph nodes, as a plain `description` attribute.
+# Ingest's old-onto-new join already carries node attributes across a rebuild
+# (fresh parser values win), so a description survives exactly as long as its
+# node does — no sidecar, no read-time join, nothing to prune.
+# DESCRIPTIONS_FILE is only read once, to migrate pre-7.0 sidecars.
 DESCRIPTIONS_FILE = os.path.join(".codecompass", "description.jsonl")
 
 
 def descriptions_path(repo_path: str) -> str:
     return os.path.join(repo_path, DESCRIPTIONS_FILE)
-
-
-def load_descriptions(repo_path: str) -> dict[str, str]:
-    """Read the sidecar as {node_id: description}.
-
-    A missing file or an unparseable line yields nothing rather than raising —
-    a query must still answer when the sidecar is absent.
-    """
-    out: dict[str, str] = {}
-    try:
-        with open(descriptions_path(repo_path), encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if row.get("node") and row.get("description"):
-                    out[row["node"]] = row["description"]
-    except OSError:
-        pass
-    return out
-
-
-def save_descriptions(repo_path: str, descriptions: dict[str, str]) -> int:
-    """Write the sidecar, one JSON object per line, sorted by node id."""
-    path = descriptions_path(repo_path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        for nid in sorted(descriptions):
-            if descriptions[nid]:
-                f.write(json.dumps({"node": nid, "description": descriptions[nid]}) + "\n")
-    return len(descriptions)
 
 
 def _entity_id(project: str, name: str, file: str | None, owner: str | None = None) -> str:
@@ -197,34 +163,46 @@ class LocalGraphClient:
         # .../<repo>/.codecompass/graph.json -> <repo>
         self.repo_path = os.path.dirname(os.path.dirname(storage_path))
         self.graph = nx.MultiDiGraph()
-        self.descriptions = load_descriptions(self.repo_path)
-        # Ingest builds a throwaway graph and flips this on only for the final
-        # write, so a half-built graph never rewrites the description sidecar.
-        self.sync_descriptions = True
         self.load()
 
     def describe(self, node_id: str) -> str:
-        """Description for a node, joined from the sidecar. '' when undescribed."""
-        return self.descriptions.get(node_id, "")
+        """Description for a node, read off its attributes. '' when undescribed."""
+        node = self.graph.nodes.get(node_id)
+        return (node or {}).get("description", "")
 
     def set_description(self, node_id: str, text: str) -> None:
-        """Record a description for a node (empty text clears it)."""
+        """Record a description on the node itself (empty text clears it)."""
+        node = self.graph.nodes.get(node_id)
+        if node is None:
+            return
         text = (text or "").strip()
         if text:
-            self.descriptions[node_id] = text
+            node["description"] = text
         else:
-            self.descriptions.pop(node_id, None)
+            node.pop("description", None)
 
-    def prune_descriptions(self) -> int:
-        """Drop sidecar entries whose node no longer exists in the graph.
+    def _migrate_sidecar_descriptions(self) -> None:
+        """One-time adoption of the pre-7.0 description.jsonl sidecar.
 
-        Called after an ingest rebuild: a renamed or deleted symbol takes its
-        description with it instead of lingering as a ghost forever.
+        Sidecar entries join onto their nodes as the `description` attribute
+        (node attrs win if both exist); the file is then deleted so this runs
+        exactly once per repo.
         """
-        stale = [nid for nid in self.descriptions if nid not in self.graph]
-        for nid in stale:
-            del self.descriptions[nid]
-        return len(stale)
+        path = descriptions_path(self.repo_path)
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            return
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            node = self.graph.nodes.get(row.get("node") or "")
+            if node is not None and row.get("description"):
+                node.setdefault("description", row["description"])
+        os.remove(path)
 
     def load(self) -> None:
         """Load graph from JSON file."""
@@ -236,29 +214,14 @@ class LocalGraphClient:
             except (json.JSONDecodeError, Exception) as e:
                 print(f"Warning: Could not load graph from {self.storage_path} ({e}). Starting fresh.")
                 self.graph = nx.MultiDiGraph()
-            self._adopt_legacy_descriptions()
-
-    def _adopt_legacy_descriptions(self) -> None:
-        """Move descriptions off nodes written by pre-sidecar versions.
-
-        Older graphs stored the description as a node attribute and flagged the
-        agent-authored ones; only those are worth keeping (the rest were
-        generated blurbs like "python function in x.py"). The attributes are
-        dropped as they are read, so this runs exactly once per graph.
-        """
-        for _nid, a in self.graph.nodes(data=True):
-            legacy = a.pop("description", None)
-            if legacy and a.get("agent_inferred"):
-                self.descriptions.setdefault(_nid, legacy)
+            self._migrate_sidecar_descriptions()
 
     def save(self) -> None:
-        """Save the graph and its description sidecar."""
+        """Save the graph (descriptions included — they're node attributes)."""
         os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
         data = nx.node_link_data(self.graph, edges="links")
         with open(self.storage_path, "w") as f:
             json.dump(data, f, indent=2)
-        if self.sync_descriptions:
-            save_descriptions(self.repo_path, self.descriptions)
 
     # ------------------------------------------------------------------
     # Structural nodes (hierarchy skeleton)

@@ -35,18 +35,28 @@ _ADAPTER_MCP_CONFIG = Path.home() / ".config" / "mcp" / "mcp.json"
 
 _ADAPTER_PKG = "npm:pi-mcp-adapter"
 _ADAPTER_NAME = "pi-mcp-adapter"
+# pi runs Claude Code-compatible command hooks (what the codecompass guardrail
+# is) through this extension; project .pi/settings.json wires the hook itself.
+_HOOKS_PKG = "npm:@hsingjui/pi-hooks"
+_HOOKS_NAME = "pi-hooks"
 
 def _server_command() -> str:
-    """Absolute path to the codecompass-mcp console script, when we can find it.
+    """The uv-installed codecompass-mcp binary, when present.
 
-    A bare "codecompass-mcp" only resolves if pi inherits a PATH that reaches
-    this interpreter's bin dir — which it often doesn't. Under pyenv it is
-    worse than missing: the shim resolves a *different* Python depending on the
-    launch directory's .python-version, so pi silently gets "command not found"
-    while the same name works in a shell inside the project. The script sitting
-    next to sys.executable is the one belonging to the environment codecompass
-    is actually installed in.
+    install.sh installs via `uv tool install`, which puts an isolated,
+    venv-free binary in ~/.local/bin — that path is stable no matter which
+    Python environment runs this code. A bare "codecompass-mcp" only resolves
+    if pi inherits a PATH that reaches the right bin dir, and a script next to
+    sys.executable ties the server to whatever venv happened to run setup —
+    both are the venv hell uv exists to avoid. Fall back to PATH, then to the
+    sibling of the current interpreter.
     """
+    uv_bin = Path.home() / ".local" / "bin" / "codecompass-mcp"
+    if uv_bin.exists():
+        return str(uv_bin)
+    found = shutil.which("codecompass-mcp")
+    if found:
+        return found
     script = Path(sys.executable).with_name("codecompass-mcp")
     return str(script) if script.exists() else "codecompass-mcp"
 
@@ -88,6 +98,12 @@ Orient first: start from an entry point, trace its flow and dependencies, then
 read only the specific slices the graph points you to. Do not `grep`/`cat`/`rg`
 across the repo to find code.
 
+What's in it for you: one graph query replaces dozens of file opens, so you
+finish in fewer turns with context left for the real work — and every answer
+carries a `file:line` you can verify instead of a guess. What you write back
+(descriptions, edges, fixes) survives this session: your next session starts
+from what you learned, not from zero.
+
 The server defaults to the current directory; call `codecompass_set_repo` to
 point it at another repo.
 
@@ -99,6 +115,7 @@ point it at another repo.
 
 - `codecompass_tree` — full project tree
 - `codecompass_grep` — regex over indexed entities, e.g. `pattern="^get_"`
+- `codecompass_search` — semantic search by idea, not name (needs the `[search]` extra)
 
 ## Trace and impact
 
@@ -114,13 +131,17 @@ point it at another repo.
 ## Recording what the parser missed
 
 - `codecompass_add_entity` — record a parser-missed entity (kind, file, line, description)
-- `codecompass_add_call` — record a parser-missed call edge
+- `codecompass_add_call` — record a parser-missed edge (relation is free-form)
+- `codecompass_modify_relation` — retype an edge, even a parser edge it got wrong
+- `codecompass_delete_entity` / `codecompass_delete_call` — undo a wrong agent entry
 
 ## Notes
 
 - Use `add_entity`/`add_call` opportunistically while reading — they are the ONLY
   way the graph gains descriptions and parser-invisible edges. Entries are marked
   `agent_inferred` and survive re-ingest. Flush what you learned before re-ingesting.
+- Ambiguous names return a candidate list (`id` + `file`) — retry with
+  `file`/`caller_file`/`callee_file`/`id` to target exactly one.
 - After every ingest, also update `.codecompass/overview.md`, `memory.md`, and
   `learnings.md`: correct what changed, delete what no longer applies.
 - If the graph looks stale or incomplete, re-run `codecompass_ingest`.
@@ -134,19 +155,19 @@ def _pi_available() -> bool:
     return shutil.which("pi") is not None or (Path.home() / ".pi").is_dir()
 
 
-def _adapter_installed() -> bool:
+def _package_installed(name: str) -> bool:
     try:
         out = subprocess.run(
             ["pi", "list"], capture_output=True, text=True, timeout=30
         )
-        return _ADAPTER_NAME in (out.stdout + out.stderr)
+        return name in (out.stdout + out.stderr)
     except Exception:
         return False
 
 
-def _install_adapter() -> None:
+def _install_package(pkg: str) -> None:
     # Non-interactive; failures are non-fatal — the skill/config still get written.
-    subprocess.run(["pi", "install", _ADAPTER_PKG], check=False, timeout=300)
+    subprocess.run(["pi", "install", pkg], check=False, timeout=300)
 
 
 def _write_one_mcp_config(path: Path) -> bool:
@@ -221,12 +242,13 @@ def setup_pi(force: bool = False, quiet: bool = False) -> bool:
     if _write_mcp_config():
         say(f"Pointed pi at {_server_command()} in {_PI_MCP_CONFIG}")
 
+    for name, pkg in ((_ADAPTER_NAME, _ADAPTER_PKG), (_HOOKS_NAME, _HOOKS_PKG)):
+        if not _package_installed(name):
+            say(f"Installing {name}...")
+            _install_package(pkg)
+
     if _skill_is_current() and not force:
         return True
-
-    if not _adapter_installed():
-        say("Installing pi-mcp-adapter...")
-        _install_adapter()
 
     _SKILL_DIR.mkdir(parents=True, exist_ok=True)
     _SKILL_FILE.write_text(_SKILL_MD)

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(bash|grep|glob)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"/Users/manojkumarmuthukumaran/Documents/Work/codecompass/.agents/hooks/block-file-search.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -44,3 +44,8 @@ benchmarks/results/*.json
 
 # CodeCompass half-built graph from an interrupted ingest
 .codecompass/graph.json.copy
+
+# CodeCompass vector index (rebuilt on ingest)
+.codecompass/vectors.tvim
+# CodeCompass vector index payloads (rebuilt on ingest)
+.codecompass/vectors.meta.json

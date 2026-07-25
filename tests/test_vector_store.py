@@ -1,6 +1,6 @@
 """Vector store: wipe-rebuild on index + semantic search returns the right entity.
 
-Uses real LanceDB in a tmp dir; the embedding model is faked with a
+Uses real turbovec in a tmp dir; the embedding model is faked with a
 bag-of-words hash so the test needs no download. Skips when the optional
 `search` deps aren't installed.
 """
@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-pytest.importorskip("lancedb")
+pytest.importorskip("turbovec")
 pytest.importorskip("fastembed")
 
 from graph import vector_store

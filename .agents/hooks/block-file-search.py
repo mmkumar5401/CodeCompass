@@ -15,7 +15,7 @@ _REPO = "/Users/manojkumarmuthukumaran/Documents/Work/codecompass"
 _REGISTRY = os.environ.get(
     "CODECOMPASS_REPOS", os.path.expanduser("~/.codecompass/repos"))
 
-_BLOCKED_TOOLS = {"Grep", "Glob"}
+_BLOCKED_TOOLS = {"grep", "glob"}
 # Word-boundary match anywhere in the command: catches `grep foo`,
 # `git grep foo`, `sudo cat f`, `xargs rg` — not just command position.
 # (?![\w-]) keeps the bare-`cat` rule off hyphenated names; git's own
@@ -38,9 +38,16 @@ def _repos() -> list:
 
 
 def _repo_containing(path: str):
-    """The registered codecompass repo containing path, or None."""
+    """The registered codecompass repo containing path, or None.
+
+    Compared case-insensitively: macOS/Windows filesystems don't distinguish
+    case, and hosts pass cwd in whatever case the session was started with,
+    so an exact string match can silently miss the repo we're standing in.
+    """
+    npath = os.path.realpath(path).lower()
     for repo in _repos():
-        if path == repo or path.startswith(repo + os.sep):
+        nrepo = os.path.realpath(repo).lower()
+        if npath == nrepo or npath.startswith(nrepo + os.sep):
             return repo
     return None
 
@@ -53,19 +60,26 @@ def _resolve(token: str, cwd: str) -> str:
 
 
 def _block(what: str) -> None:
-    print(
+    reason = (
         f"Don't use {what}. Discover through the codecompass MCP tools — "
         "`grep` to find what's relevant, then `flow`/`impact`/`deps` to trace — "
         "then read the specific slice you need with the Read tool (or "
-        "`sed -n`/`head`/`tail`), not a whole-file dump.",
-        file=sys.stderr,
+        "`sed -n`/`head`/`tail`), not a whole-file dump."
     )
+    # One block signal per host: Claude Code blocks on exit code 2 and shows
+    # stderr; pi (via pi-hooks) parses the deny JSON from stdout.
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }}))
+    print(reason, file=sys.stderr)
     sys.exit(2)
 
 
 def main() -> None:
     payload = json.load(sys.stdin)
-    tool_name = payload.get("tool_name", "")
+    tool_name = payload.get("tool_name", "").lower()  # Claude: Bash/Grep; pi: bash/grep
     tool_input = payload.get("tool_input", {}) or {}
     cwd = payload.get("cwd") or os.getcwd()
 
@@ -76,7 +90,7 @@ def main() -> None:
             _block(f"the {tool_name} tool")
         sys.exit(0)  # outside every codecompass repo — no graph to route through
 
-    if tool_name == "Bash":
+    if tool_name == "bash":
         command = str(tool_input.get("command", ""))
         if _BLOCKED_SHELL_RE.search(command):
             saw_path = False

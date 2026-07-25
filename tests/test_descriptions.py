@@ -1,6 +1,6 @@
-"""Descriptions live in .codecompass/description.jsonl, joined onto results by
-node id — they survive re-ingest and a deleted graph.json, and die with their
-node."""
+"""Descriptions live ON the graph nodes as a plain attribute — they ride the
+ingest join (surviving nodes keep them), die with their node, and the pre-7.0
+description.jsonl sidecar is migrated onto nodes once, then deleted."""
 import json
 import sys
 from pathlib import Path
@@ -59,16 +59,15 @@ def test_descriptions_survive_ingest(tmp_path, monkeypatch):
     add_entity(str(repo), "foo", file="a.py", line=1,
                description="Returns the number one.")
 
-    # the description lands in the sidecar, not on the node
-    assert _description(repo, foo_id) == "Returns the number one."
-    assert "description" not in _node(repo, foo_id)
+    # the description is a plain node attribute
+    assert _node(repo, foo_id)["description"] == "Returns the number one."
 
     # add an agent_inferred call edge too
     assert add_call(str(repo), "bar", "foo")["status"] in ("added", "exists")
 
     ingest_code(str(repo))  # old graph replaced by a freshly parsed one
 
-    # same id, so the sidecar still joins onto the freshly parsed node
+    # same id, so the join carries the attribute onto the freshly parsed node
     assert _description(repo, foo_id) == "Returns the number one."
 
     client = get_client(str(repo))
@@ -93,34 +92,26 @@ def test_deleted_entity_takes_its_description_with_it(tmp_path, monkeypatch):
     client = get_client(str(repo))
     try:
         assert foo_id not in client.graph  # ghost dropped, not resurrected
-        assert foo_id not in client.descriptions  # and its description with it
+        assert client.describe(foo_id) == ""  # description died with it
     finally:
         client.close()
 
-    # the pruned sidecar on disk agrees
-    assert foo_id not in (repo / ".codecompass" / "description.jsonl").read_text()
 
-
-def test_descriptions_survive_a_deleted_graph_json(tmp_path, monkeypatch):
-    """description.jsonl owns descriptions, so graph.json is disposable."""
+def test_sidecar_is_migrated_onto_nodes_once(tmp_path, monkeypatch):
+    """Pre-7.0 repos have description.jsonl; the first load joins it onto the
+    nodes and deletes the file."""
     repo = _init(tmp_path, monkeypatch, "def foo():\n    return 1\n")
     foo_id = _entity_id(repo, "foo")
-    add_entity(str(repo), "foo", file="a.py", line=1, description="Returns one.")
 
     sidecar = repo / ".codecompass" / "description.jsonl"
-    assert json.loads(sidecar.read_text().splitlines()[0]) == {
-        "node": foo_id, "description": "Returns one."}
+    sidecar.write_text(json.dumps({"node": foo_id, "description": "Legacy."}) + "\n")
 
-    # nuke the working index — only the sidecar is left
-    (repo / ".codecompass" / "graph.json").unlink()
+    assert _description(repo, foo_id) == "Legacy."
+    assert not sidecar.exists()
+
+    # and the migration persists through the next ingest
     ingest_code(str(repo))
-
-    assert _description(repo, foo_id) == "Returns one."
-
-    # and the join reaches the query layer
-    from graph.code_queries import fetch_grep
-    rows = fetch_grep("foo", str(repo), repo.name)["matches"]
-    assert any(r["description"] == "Returns one." for r in rows)
+    assert _description(repo, foo_id) == "Legacy."
 
 
 def test_grep_searches_descriptions(tmp_path, monkeypatch):
@@ -171,6 +162,6 @@ def test_agent_created_node_survives_until_its_file_is_deleted(tmp_path, monkeyp
     client = get_client(str(repo))
     try:
         assert ghost_id not in client.graph
-        assert ghost_id not in client.descriptions  # pruned with its node
+        assert client.describe(ghost_id) == ""  # description died with its node
     finally:
         client.close()
