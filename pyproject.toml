@@ -1,6 +1,6 @@
 [project]
 name = "codecompass-mcp"
-version = "7.0.4"
+version = "7.0.5"
 description = "Structural code context for AI coding agents — a local code knowledge graph for blast radius, impact, deps, dead code, and flow tracing"
 readme = "README.md"
 license = {text = "MIT"}
@@ -31,6 +31,7 @@ dependencies = [
     "tree-sitter-typescript>=0.21.0",
     "tree-sitter-html>=0.21.0",
     "tree-sitter-css>=0.21.0",
+    "tree-sitter-php>=0.23.0",
     "watchdog>=4.0.0",
 ]
 
