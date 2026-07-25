@@ -80,10 +80,9 @@ def test_guard_wiring_lands_in_settings_files(tmp_path, monkeypatch):
     cmds = [h["command"] for e in pi["hooks"]["PreToolUse"] for h in e["hooks"]]
     assert cmds == [f'python3 "{repo}/.agents/hooks/block-file-search.py"']
 
-    # opencode reuses the .claude/settings.json hooks via the plugin — init only
-    # registers the plugin in opencode.json
-    oc = json.loads((repo / "opencode.json").read_text())
-    assert oc["plugin"] == ["opencode-hooks-api"]
+    # opencode reuses the .claude/settings.json hooks via the plugin, which is
+    # registered in the user-global config — init leaves no file in the repo
+    assert not (repo / "opencode.json").exists()
 
     # existing user hooks survive a re-init
     pi["hooks"]["PreToolUse"].append({"matcher": "write", "hooks": [
@@ -117,9 +116,71 @@ def test_legacy_claude_matchers_and_paths_are_migrated(tmp_path, monkeypatch):
     pre = json.loads((claude_dir / "settings.json").read_text())["hooks"]["PreToolUse"]
     ours = [e for e in pre if "block-file-search.py" in json.dumps(e)]
     assert all(e["matcher"].startswith("^(") for e in ours)
-    assert all('"${CLAUDE_PROJECT_DIR:-.}' in h["command"]
+    assert all('"${CLAUDE_PROJECT_DIR:-${OPENCODE_PROJECT_DIR:-.}}' in h["command"]
                for e in ours for h in e["hooks"])
     assert any(e.get("matcher") == "Write" for e in pre)  # user entry untouched
+
+
+def test_hook_command_resolves_the_root_on_every_host(tmp_path, monkeypatch):
+    """Each bridge announces the project root differently, and getting it wrong
+    fails open: the script isn't found, bash exits non-2, and both opencode and
+    pi treat that as a non-blocking error rather than a denial."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    init_project(str(repo))
+
+    claude = json.loads((repo / ".claude" / "settings.json").read_text())
+    cmds = [h["command"] for e in claude["hooks"]["PreToolUse"] for h in e["hooks"]]
+    assert cmds, "no PreToolUse hooks written"
+    for c in cmds:
+        assert "CLAUDE_PROJECT_DIR" in c    # Claude Code sets this
+        assert "OPENCODE_PROJECT_DIR" in c  # opencode-hooks-plugin sets this
+        assert ":-.}" in c                  # pi sets neither, but spawns with cwd
+
+
+def test_repo_level_opencode_config_is_cleaned_up(tmp_path, monkeypatch):
+    """Older versions wrote a repo-level opencode.json. The plugin belongs in
+    the user-global config, so init strips our entry — keeping the file only
+    when the user put something of their own in it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    (repo / "opencode.json").write_text(json.dumps(
+        {"plugin": ["opencode-hooks-api", "someone-elses-plugin"]}))
+
+    init_project(str(repo))
+
+    oc = json.loads((repo / "opencode.json").read_text())
+    assert oc["plugin"] == ["someone-elses-plugin"]  # ours gone, theirs kept
+
+
+def test_ours_only_opencode_config_is_deleted(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    (repo / "opencode.json").write_text(json.dumps(
+        {"$schema": "https://opencode.ai/config.json",
+         "plugin": ["opencode-hooks-api"]}))
+
+    init_project(str(repo))
+
+    # nothing but our plugin and boilerplate was in it
+    assert not (repo / "opencode.json").exists()
+
+
+def test_unparseable_opencode_config_is_left_alone(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    (repo / "opencode.json").write_text("{ not json")
+
+    init_project(str(repo))
+
+    assert (repo / "opencode.json").read_text() == "{ not json"
 
 
 def test_pi_files_land_even_when_pi_is_not_on_path(tmp_path, monkeypatch):

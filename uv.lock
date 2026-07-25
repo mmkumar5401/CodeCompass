@@ -391,7 +391,7 @@ wheels = [
 
 [[package]]
 name = "codecompass-mcp"
-version = "7.1.0"
+version = "7.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },

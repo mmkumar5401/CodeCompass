@@ -1,5 +1,31 @@
 # Changelog
 
+## [7.1.1] - 2026-07-25
+
+### Fixed
+- **The guard never ran in opencode.** init registered a plugin named
+  `opencode-hooks-api` — the title of the project's GitHub repo and README, but
+  not what it publishes as. The npm package is `opencode-hooks-plugin`, so
+  opencode resolved nothing and the hooks in `.claude/settings.json` were never
+  fired. Existing configs carrying the dead name are rewritten in place.
+- **The hook command now resolves the project root on every host.** Each bridge
+  announces it differently: Claude Code sets `$CLAUDE_PROJECT_DIR`,
+  `opencode-hooks-plugin` sets `$OPENCODE_PROJECT_DIR` and spawns with no cwd of
+  its own, and `@hsingjui/pi-hooks` sets no variable but does spawn at the
+  project root. The command falls through all three. This failed silently
+  before: the script wasn't found, bash exited non-2, and both bridges treat a
+  non-2 exit as a non-blocking error rather than a denial.
+- `install.sh` drops the package's uv cache entries before installing.
+  `--refresh` alone could still resolve to the previous version, or fail with
+  "no version of codecompass-mcp==\<new\>", immediately after a release.
+
+### Changed
+- **No more repo-level `opencode.json`.** Registering the plugin belongs in the
+  user-global config, which `setup_opencode` writes and which applies to every
+  repo; the project copy only ever added a file to your tree. init now removes
+  the one older versions created, keeping the file if you had put anything of
+  your own in it and leaving an unparseable one untouched.
+
 ## [7.1.0] - 2026-07-25
 
 ### Changed

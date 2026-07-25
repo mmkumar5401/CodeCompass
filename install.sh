@@ -9,7 +9,7 @@
 #   2. runs `codecompass setup`, which wires every agent host present, pointing
 #      them all at the uv binary (~/.local/bin/codecompass-mcp):
 #      - pi:       pi-mcp-adapter + pi-hooks extensions, skill, MCP server entry
-#      - opencode: opencode-hooks-api plugin + MCP server in the global config
+#      - opencode: opencode-hooks-plugin plugin + MCP server in the global config
 #      Per-project files (AGENTS.md, .agents/, guard hooks) are written by
 #      `init`, which runs automatically the first time the MCP server is used
 #      in a repo.
@@ -32,6 +32,11 @@ command -v uv >/dev/null 2>&1 || fail "uv installation failed."
 
 # --- 2. Install the package ---------------------------------------------------
 say "Installing $PKG with uv (isolated, no venvs touched)..."
+# `--refresh` alone is not enough right after a release: uv can keep serving a
+# cached index page and resolve to the previous version, or fail outright with
+# "no version of $PKG==<new>". Dropping this package's cache entries first is
+# cheap and makes a fresh install deterministic.
+uv cache clean "$PKG" >/dev/null 2>&1 || true
 uv tool install --force --refresh "$PKG"
 
 CODECOMPASS="$UV_BIN/codecompass"

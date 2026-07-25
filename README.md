@@ -80,7 +80,7 @@ Gives you the `codecompass` CLI and the `codecompass-mcp` MCP server, and wires
 every host it finds:
 
 - **pi** — pi-mcp-adapter + pi-hooks extensions, skill, MCP server entry
-- **opencode** — `opencode-hooks-api` plugin + MCP server entry in the global
+- **opencode** — `opencode-hooks-plugin` plugin + MCP server entry in the global
   config, so the guard hooks (below) fire there too
 - **Claude Code** — `claude mcp add codecompass -- codecompass-mcp`
 
@@ -221,7 +221,7 @@ blocked. **Targeted reads stay free** (the `Read` tool, `sed -n`, `head`/`tail`)
 The point is to change the default reflex to graph-first, not to remove reads.
 One guard script serves all three hosts: it lives at `.agents/hooks/
 block-file-search.py` in each project (Claude reads it via `.claude/settings.json`,
-pi via pi-hooks + `.pi/settings.json`, opencode via the opencode-hooks-api
+pi via pi-hooks + `.pi/settings.json`, opencode via the opencode-hooks-plugin
 plugin reading the same `.claude/settings.json`) — edit or delete it to adjust.
 Block messages point the agent at the codecompass MCP tools (`grep`, `flow`,
 `impact`, `deps`, …).

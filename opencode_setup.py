@@ -6,7 +6,7 @@ opencode has native MCP support and reads a user-global config at
 invocation, merges two entries into that file:
 
     1. opencode not installed -> do nothing.
-    2. register the `opencode-hooks-api` plugin, so the codecompass guard
+    2. register the `opencode-hooks-plugin` plugin, so the codecompass guard
        hooks that `init` writes into a project's .claude/settings.json also
        fire inside opencode.
     3. register the codecompass-mcp server in the `mcp` section.
@@ -28,7 +28,12 @@ _CONFIG = Path.home() / ".config" / "opencode" / "opencode.json"
 
 # Runs Claude Code-format hooks (what `init` writes into .claude/settings.json)
 # inside opencode.
-_HOOKS_PLUGIN = "opencode-hooks-api"
+# npm name, which differs from the project's own title: the GitHub repo and its
+# README both call it "opencode-hooks-api", but it publishes as
+# "opencode-hooks-plugin". Taking the name from the README is why the guard
+# never loaded in opencode before 7.1.1.
+_HOOKS_PLUGIN = "opencode-hooks-plugin"
+_LEGACY_HOOKS_PLUGINS = ("opencode-hooks-api",)
 
 _SERVER_NAME = "codecompass"
 
@@ -83,9 +88,15 @@ def setup_opencode(quiet: bool = False) -> bool:
     changed = False
 
     plugins = config.setdefault("plugin", [])
-    if _HOOKS_PLUGIN not in plugins:
-        plugins.append(_HOOKS_PLUGIN)
+    # Configs written before 7.1.1 name a package that never existed on npm, so
+    # opencode loaded nothing. Rewrite in place instead of appending beside it.
+    kept = [p for p in plugins if p not in _LEGACY_HOOKS_PLUGINS]
+    if len(kept) != len(plugins):
         changed = True
+    if _HOOKS_PLUGIN not in kept:
+        kept.append(_HOOKS_PLUGIN)
+        changed = True
+    config["plugin"] = kept
 
     mcp = config.setdefault("mcp", {})
     entry = dict(mcp.get(_SERVER_NAME) or {})

@@ -48,7 +48,7 @@ High-level architectural context and decisions.
   checks across case variants must use listdir, not os.path.exists — macOS
   filesystems are case-insensitive.
 - The guard script serves every host: Claude Code blocks on exit 2 + stderr;
-  pi (via the pi-hooks extension) and opencode (via opencode-hooks-api) parse
+  pi (via the pi-hooks extension) and opencode (via opencode-hooks-plugin) parse
   the deny JSON on stdout. Tool names are lowercased before matching; repo
   matching is case-insensitive (a lowercase $PWD against a proper-case
   registry silently allowed everything).
@@ -58,7 +58,7 @@ High-level architectural context and decisions.
 - pi wiring: `.pi/settings.json` (pi-hooks format, matcher `^(bash|grep|glob)$`,
   absolute baked command). Requires `npm:@hsingjui/pi-hooks` — `setup-pi`
   installs it alongside pi-mcp-adapter.
-- opencode wiring: `_ensure_opencode_config` registers `opencode-hooks-api` in
+- opencode wiring: `_ensure_opencode_config` registers `opencode-hooks-plugin` in
   the repo's `opencode.json`; `codecompass setup-opencode` / `setup` merges the
   plugin + MCP server into the global `~/.config/opencode/opencode.json`. The
   plugin reads `.claude/settings.json` — no opencode-specific hook file.

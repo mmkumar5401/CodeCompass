@@ -97,7 +97,9 @@ def init_project(repo_path: str) -> None:
     _ensure_agent_mds(repo_path)        # 2. per-agent md pointers
     _ensure_claude_settings(repo_path)  # 3a. Claude guard wiring
     _ensure_pi_settings(repo_path)      # 3b. pi guard wiring (via pi-hooks)
-    _ensure_opencode_config(repo_path)  # 3c. opencode guard (via .claude/settings.json)
+    _remove_opencode_config(repo_path)  # 3c. drop the repo-level opencode.json
+                                        #     older versions wrote; the plugin is
+                                        #     registered in the global config
     _ensure_gitignore(repo_path)
     _register_repo(repo_path)
     _backfill_file_index(repo_path)     # 4. guard index for pre-existing graphs
@@ -449,19 +451,25 @@ if __name__ == "__main__":
 
 # Tool names that should route through the block-file-search hook. Matchers are
 # regexes covering both hosts of this settings file: Claude Code tools are
-# capitalized (Bash/Grep/Glob); opencode (via opencode-hooks-api, which reads
+# capitalized (Bash/Grep/Glob); opencode (via opencode-hooks-plugin, which reads
 # this same file) uses lowercase (bash/grep/glob).
 _CLAUDE_HOOK_MATCHERS = ("^(Bash|bash)$", "^(Grep|grep)$", "^(Glob|glob)$")
 _LEGACY_CLAUDE_MATCHERS = {"Bash": "^(Bash|bash)$", "Grep": "^(Grep|grep)$",
                            "Glob": "^(Glob|glob)$"}
-# $CLAUDE_PROJECT_DIR resolves to the project root under Claude Code (cwd may
-# be a subdirectory); opencode-hooks-api doesn't set it but runs commands from
-# the project root, so the :- fallback covers both.
-_CLAUDE_HOOK_COMMAND = 'python3 "${CLAUDE_PROJECT_DIR:-.}/.agents/hooks/block-file-search.py"'
+# Each host announces the project root differently, so the command falls through
+# all three: Claude Code sets $CLAUDE_PROJECT_DIR (cwd may be a subdirectory);
+# opencode-hooks-plugin sets $OPENCODE_PROJECT_DIR and spawns with no cwd of its
+# own; @hsingjui/pi-hooks sets no variable but does spawn with cwd at the project
+# root, which the bare `.` covers. Getting this wrong fails silently — the script
+# isn't found, bash exits non-2, and both bridges treat that as a non-blocking
+# error rather than a denial.
+_CLAUDE_HOOK_COMMAND = ('python3 "${CLAUDE_PROJECT_DIR:-${OPENCODE_PROJECT_DIR:-.}}'
+                        '/.agents/hooks/block-file-search.py"')
 _LEGACY_CLAUDE_HOOK_COMMANDS = (
     "python3 .claude/hooks/block-file-search.py",
     'python3 "$CLAUDE_PROJECT_DIR/.claude/hooks/block-file-search.py"',
     'python3 "$CLAUDE_PROJECT_DIR/.agents/hooks/block-file-search.py"',
+    'python3 "${CLAUDE_PROJECT_DIR:-.}/.agents/hooks/block-file-search.py"',
 )
 
 
@@ -626,34 +634,49 @@ def _opencode_installed() -> bool:
             or os.path.isdir(os.path.join(os.path.expanduser("~"), ".config", "opencode")))
 
 
-# opencode runs Claude Code hooks through the opencode-hooks-api plugin, which
+# opencode runs Claude Code hooks through the opencode-hooks-plugin plugin, which
 # reads the SAME .claude/settings.json init already writes — so the guard needs
 # no opencode-specific hook file, only the plugin registered in opencode.json.
-_OPENCODE_HOOKS_PLUGIN = "opencode-hooks-api"
+# npm name, which differs from the project's own title: the GitHub repo and its
+# README both call it "opencode-hooks-api", but it publishes as
+# "opencode-hooks-plugin". Taking the name from the README is why the guard
+# never loaded in opencode before 7.1.1.
+_OPENCODE_HOOKS_PLUGIN = "opencode-hooks-plugin"
+_LEGACY_OPENCODE_HOOKS_PLUGINS = ("opencode-hooks-api",)
 
 
-def _ensure_opencode_config(repo_path: str) -> None:
-    """Register the opencode-hooks-api plugin in the repo's opencode.json so the
-    .claude/settings.json guard fires in opencode too. No-op when opencode is
-    not installed; preserves any plugins the user already listed."""
-    if not _opencode_installed():
-        return
+def _remove_opencode_config(repo_path: str) -> None:
+    """Delete the repo-level opencode.json this used to write.
+
+    Registering the hooks plugin belongs in the user-global config, which
+    `setup_opencode` already writes and which applies to every repo — so the
+    project copy only ever added a file to someone's tree. Older versions
+    created one anyway; strip our entry, and remove the file outright when
+    nothing but boilerplate is left. A config holding anything of the user's
+    keeps that content and just loses our plugin name.
+    """
     config_path = os.path.join(repo_path, "opencode.json")
-    config: dict = {}
-    if os.path.exists(config_path):
-        try:
-            with open(config_path) as f:
-                config = json.load(f) or {}
-        except (json.JSONDecodeError, ValueError):
-            console.print(
-                f"[yellow]Could not parse {config_path}; leaving it untouched. "
-                f'Add "{_OPENCODE_HOOKS_PLUGIN}" to its plugin list manually.[/]'
-            )
-            return
-    plugins = config.setdefault("plugin", [])
-    if _OPENCODE_HOOKS_PLUGIN in plugins:
+    if not os.path.exists(config_path):
         return
-    plugins.append(_OPENCODE_HOOKS_PLUGIN)
+    try:
+        with open(config_path) as f:
+            config = json.load(f) or {}
+    except (json.JSONDecodeError, ValueError, OSError):
+        return  # hand-edited or invalid: never touch what we can't understand
+
+    ours = {_OPENCODE_HOOKS_PLUGIN, *_LEGACY_OPENCODE_HOOKS_PLUGINS}
+    plugins = [p for p in config.get("plugin", []) if p not in ours]
+    if plugins == config.get("plugin", []):
+        return  # nothing of ours in here
+
+    config["plugin"] = plugins
+    if not plugins:
+        config.pop("plugin")
+    # "$schema" is editor boilerplate, not user intent, so a file left holding
+    # only that was ours alone.
+    if not {k for k in config if k != "$schema"}:
+        os.remove(config_path)
+        return
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
@@ -1145,7 +1168,7 @@ def main():
 
     subparsers.add_parser(
         "setup-opencode",
-        help="Wire CodeCompass into opencode (opencode-hooks-api plugin + MCP server)")
+        help="Wire CodeCompass into opencode (opencode-hooks-plugin plugin + MCP server)")
 
     subparsers.add_parser(
         "setup", help="Wire CodeCompass into every agent host present (pi, opencode)")
