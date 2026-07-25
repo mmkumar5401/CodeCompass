@@ -1,5 +1,14 @@
 # Changelog
 
+## [7.0.3] - 2026-07-25
+
+### Changed
+- **Root AGENTS.md is no longer written.** The code exploration requirements
+  checklist moved into the per-host instruction files (`.claude/CLAUDE.md`,
+  `.pi/SYSTEM.md`, `.opencode/AGENTS.md`); init strips the managed block from
+  the root AGENTS.md (deleting the file when the block was all it held,
+  preserving user content otherwise).
+
 ## [7.0.2] - 2026-07-25
 
 ### Changed

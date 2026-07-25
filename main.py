@@ -128,12 +128,24 @@ def _ensure_agents_dir(repo_path: str) -> None:
         os.remove(old_hook)
 
 
+_EXPLORATION_CHECKLIST = """\
+### Code exploration requirements
+
+- [ ] Explore only through the codecompass tools — `grep`/`search`/`tree` to discover, `flow`/`deps` to understand. Never `grep`/`cat`/`rg` the repo directly.
+- [ ] Trace the `flow` of every code path you are about to touch BEFORE editing.
+- [ ] Run `impact`/`blast_radius` on every symbol and file you will change — before the edit, and again after to confirm the actual fallout.
+- [ ] Graph missing something or wrong? Fix it the moment you notice: `add_entity` / `add_call`.
+- [ ] `ingest` after every edit session, then flush what you learned into the graph with `add_entity` / `add_call`.
+"""
+
+
 def _write_pointer_md(path: str) -> None:
-    """Write a per-agent md pointer file. Rewrites files we generated (marker
-    or our instruction/pointer lines present); appends the pointer to
-    user-authored files without it; leaves everything else alone."""
+    """Write a per-agent md instructions file (marker + pointer + the code
+    exploration checklist). Rewrites files we generated; appends the pointer
+    to user-authored files without it; leaves everything else alone."""
     block = (f"{_GENERATED_MARKER_LINE}\n{_CODECOMPASS_POINTER}\n\n"
-             f"{_CODECOMPASS_READ_INSTRUCTION}\n")
+             f"{_CODECOMPASS_READ_INSTRUCTION}\n\n"
+             f"{_EXPLORATION_CHECKLIST}")
     if not os.path.exists(path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
@@ -157,16 +169,17 @@ def _write_pointer_md(path: str) -> None:
 
 
 def _ensure_agent_mds(repo_path: str) -> None:
-    """Drop an md pointer into each agent host's native instructions file:
+    """Drop the instructions into each agent host's native file:
     .claude/CLAUDE.md (Claude Code), .pi/SYSTEM.md (pi), .opencode/AGENTS.md
-    (opencode) — plus the managed block in the root AGENTS.md every host reads.
-    Old locations from pre-7.0 init are cleaned up when we generated them."""
+    (opencode). Old locations from pre-7.0 init are cleaned up when we
+    generated them, and the managed block is stripped from the root AGENTS.md
+    (hosts now read their own files, not a shared one)."""
     _write_pointer_md(os.path.join(repo_path, ".claude", "CLAUDE.md"))
     if _pi_installed():
         _write_pointer_md(os.path.join(repo_path, ".pi", "SYSTEM.md"))
     if _opencode_installed():
         _write_pointer_md(os.path.join(repo_path, ".opencode", "AGENTS.md"))
-    _register_project_agents_md(repo_path)
+    _strip_root_agents_md(repo_path)
 
     for legacy in (os.path.join(repo_path, "claude.md"),
                    os.path.join(repo_path, ".pi", "agent", "AGENTS.md"),
@@ -753,7 +766,6 @@ def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | Non
         "inheritance) — then update .codecompass/overview.md, memory.md, and "
         "learnings.md.[/]"
     )
-    _register_project_agents_md(repo_path)
 
 
 def _agents_block() -> str:
@@ -940,53 +952,25 @@ def agents_md_is_current(repo_path: str) -> bool:
         return False
 
 
-def _agents_md_pointer_block() -> str:
-    """The managed block in the project's root AGENTS.md: the exploration
-    contract, plus a pointer to the canonical instructions in
-    .agents/codecompass.md."""
-    return f"""{_CODECOMPASS_START}
-## Code graph
-
-**{_CODECOMPASS_READ_INSTRUCTION}**
-
-{_CODECOMPASS_POINTER}
-
-Every file you open to orient burns context you needed for the task. A graph
-query costs a few tokens and answers with a `file:line` you can verify — and
-what you write back today is still here for your next session.
-
-### Code exploration requirements
-
-- [ ] Explore only through the codecompass tools — `grep`/`search`/`tree` to discover, `flow`/`deps` to understand. Never `grep`/`cat`/`rg` the repo directly.
-- [ ] Trace the `flow` of every code path you are about to touch BEFORE editing.
-- [ ] Run `impact`/`blast_radius` on every symbol and file you will change — before the edit, and again after to confirm the actual fallout.
-- [ ] Graph missing something or wrong? Fix it the moment you notice: `add_entity` / `add_call`.
-- [ ] `ingest` after every edit session, then flush what you learned into the graph with `add_entity` / `add_call`.
-{_CODECOMPASS_END}"""
-
-
-def _register_project_agents_md(repo_path: str) -> None:
-    """Write or update the Code graph pointer section in the project's AGENTS.md."""
-    block = _agents_md_pointer_block()
-    agents_md_path = os.path.join(repo_path, "AGENTS.md")
-
-    if os.path.exists(agents_md_path):
-        with open(agents_md_path) as f:
-            content = f.read()
-        if _CODECOMPASS_START in content:
-            pattern = re.escape(_CODECOMPASS_START) + r".*?" + re.escape(_CODECOMPASS_END)
-            new_content = re.sub(pattern, block, content, flags=re.DOTALL)
-        else:
-            new_content = content.rstrip() + f"\n\n---\n\n{block}\n"
-        if new_content == content:
-            return  # already current — don't churn the file's mtime
+def _strip_root_agents_md(repo_path: str) -> None:
+    """Remove the managed block from the root AGENTS.md (pre-7.1 init wrote it
+    there; hosts now read their own files — .claude/CLAUDE.md, .pi/SYSTEM.md,
+    .opencode/AGENTS.md). Deletes the file when the block was all it held;
+    preserves user content around it."""
+    path = os.path.join(repo_path, "AGENTS.md")
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        content = f.read()
+    if _CODECOMPASS_START not in content:
+        return
+    pattern = re.escape(_CODECOMPASS_START) + r".*?" + re.escape(_CODECOMPASS_END)
+    stripped = re.sub(pattern, "", content, flags=re.DOTALL).strip()
+    if stripped:
+        with open(path, "w") as f:
+            f.write(stripped + "\n")
     else:
-        new_content = block + "\n"
-
-    with open(agents_md_path, "w") as f:
-        f.write(new_content)
-
-    console.print(f"[dim]  Registered in {agents_md_path}[/]")
+        os.remove(path)
 
 
 def load_triples(triples_file: str, repo_path: str) -> None:

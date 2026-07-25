@@ -54,7 +54,7 @@ def test_ingest_skip_vectors_skips_phase5(repo_path, capsys):
              patch("main.get_client", return_value=mock_client), \
              patch("main.get_file_id_map", return_value={}), \
              patch("main.parse_directory", return_value=[MagicMock()]), \
-             patch("main._register_project_agents_md"):
+             patch("main._strip_root_agents_md"):
             main.ingest_code(repo_path, skip_vectors=True)
         captured = capsys.readouterr()
         assert "Vector index skipped (--skip-vectors)" in captured.out
@@ -70,7 +70,7 @@ def test_ingest_skip_vectors_false_runs_phase5(repo_path, capsys):
              patch("main.get_client", return_value=mock_client), \
              patch("main.get_file_id_map", return_value={}), \
              patch("main.parse_directory", return_value=[MagicMock()]), \
-             patch("main._register_project_agents_md"), \
+             patch("main._strip_root_agents_md"), \
              patch("graph.vector_store.index_entities", return_value=42):
             main.ingest_code(repo_path, skip_vectors=False)
         captured = capsys.readouterr()

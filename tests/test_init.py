@@ -174,8 +174,27 @@ def test_stale_project_is_reinitialized_on_first_tool_call(tmp_path, monkeypatch
     mcp_server._ensure_initialized(str(repo))
 
     assert agents_md_is_current(str(repo))
-    assert "--blast-radius" not in (repo / "AGENTS.md").read_text()
+    # the root AGENTS.md block is gone (hosts read their own md files now);
+    # the file held nothing else, so it's removed entirely
+    assert not (repo / "AGENTS.md").exists()
     assert (repo / ".agents" / "codecompass.md").exists()
     assert (repo / ".agents" / "hooks" / "block-file-search.py").exists()
     assert (repo / ".pi" / "settings.json").exists()
     assert (repo / ".claude" / "settings.json").exists()
+
+
+def test_root_agents_md_user_content_survives_block_removal(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text(
+        "# My project rules\n\nDo things my way.\n\n"
+        "<!-- codecompass-code-graph-start -->\n## Code graph\n\nOLD.\n"
+        "<!-- codecompass-code-graph-end -->\n")
+    monkeypatch.setenv("CODECOMPASS_REPOS", str(tmp_path / "repos"))
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    monkeypatch.setattr("main._pi_installed", lambda: False)
+
+    init_project(str(repo))
+
+    assert (repo / "AGENTS.md").read_text() == "# My project rules\n\nDo things my way.\n"
+    assert "Code exploration requirements" in (repo / ".claude" / "CLAUDE.md").read_text()

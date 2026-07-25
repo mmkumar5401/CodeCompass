@@ -41,8 +41,10 @@ High-level architectural context and decisions.
   instruction block — the version signal for auto-heal) and
   `hooks/block-file-search.py` (one guard script for all hosts). Per-host md
   pointers: `.claude/CLAUDE.md`, `.pi/SYSTEM.md`, `.opencode/AGENTS.md` (all
-  uppercase), plus the managed block in root AGENTS.md. Pre-7.0 locations
-  (root claude.md, .pi/agent/AGENTS.md) are removed when generated; existence
+  uppercase), each carrying the exploration checklist. The root AGENTS.md
+  managed block is STRIPPED on init (hosts read their own files). Pre-7.0
+  locations (root claude.md, .pi/agent/AGENTS.md) are removed when generated;
+  existence
   checks across case variants must use listdir, not os.path.exists — macOS
   filesystems are case-insensitive.
 - The guard script serves every host: Claude Code blocks on exit 2 + stderr;
@@ -71,7 +73,6 @@ High-level architectural context and decisions.
   invocation.
 
 ## Templates
-- The canonical instruction block (`_agents_block`) and the root AGENTS.md
-  pointer block (`_agents_md_pointer_block`, with the code exploration
-  requirements checklist) live in `main.py`. The pi skill text is `_SKILL_MD`
-  in `pi_setup.py`.
+- The canonical instruction block (`_agents_block`) and the exploration
+  checklist (`_EXPLORATION_CHECKLIST`, in every per-host md) live in `main.py`.
+  The pi skill text is `_SKILL_MD` in `pi_setup.py`.
