@@ -291,7 +291,7 @@ async def ingest(ctx: Context, normalize: bool = False,
     # ingest_code is blocking, so it runs in a worker thread; progress hops back
     # to the event loop from there so notifications flush while it works.
     def on_progress(pct: int, message: str) -> None:
-        anyio.from_thread.run(ctx.report_progress, pct, 100, message)
+        anyio.from_thread.run(ctx.info, f"[{pct}%] {message}")
 
     await anyio.to_thread.run_sync(
         functools.partial(ingest_code, repo, normalize=normalize,

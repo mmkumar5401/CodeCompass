@@ -24,18 +24,24 @@ async def test_ingest_reports_progress(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_server, "_REPO_PATH", str(repo))
     seen = []
 
-    async def handler(progress: float, total: float | None, message: str | None):
-        seen.append((progress, total, message))
+    async def handler(msg):
+        # msg.data is {"msg": "...", "extra": None} when sent via ctx.log
+        text = msg.data.get("msg", "") if isinstance(msg.data, dict) else str(msg.data or "")
+        seen.append(text)
 
-    async with Client(mcp_server.mcp, progress_handler=handler) as client:
+    async with Client(mcp_server.mcp, log_handler=handler) as client:
         result = await client.call_tool("ingest", {})
 
     assert result.data["status"] == "ok"
-    percents = [p for p, _, _ in seen]
+    assert len(seen) >= 3  # at least hierarchy, parsing, done
+    # Every message carries a bracketed percent: [2%], [5%], …, [100%]
+    import re
+    pct_re = re.compile(r"^\[(\d+)%\]")
+    percents = [int(m.group(1)) for t in seen if (m := pct_re.match(t))]
+    assert percents  # at least one bracketed percent
     assert percents == sorted(percents)  # monotonic
     assert percents[0] < 100 and percents[-1] == 100
-    assert all(t == 100 for _, t, _ in seen)
-    assert any("Parsing" in (m or "") for _, _, m in seen)
+    assert any("Parsing" in t for t in seen)
 
 
 @pytest.fixture
