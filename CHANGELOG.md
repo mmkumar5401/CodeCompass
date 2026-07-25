@@ -1,5 +1,12 @@
 # Changelog
 
+## [7.0.2] - 2026-07-25
+
+### Changed
+- **Vector index builds by default on ingest** (`skip_vectors` now defaults to
+  False, CLI and MCP alike). Without the `[search]` extra Phase 5 still skips
+  quietly.
+
 ## [7.0.1] - 2026-07-25
 
 ### Fixed

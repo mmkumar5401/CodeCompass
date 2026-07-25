@@ -277,7 +277,7 @@ def init() -> dict:
 @mcp.tool()
 async def ingest(ctx: Context, normalize: bool = False,
                  dump_triples: str | None = None,
-                 skip_vectors: bool = True) -> dict:
+                 skip_vectors: bool = False) -> dict:
     """Re-index the currently configured repo and rebuild the code knowledge graph.
 
     normalize: normalize entity names via Haiku (slower, needs an API key).

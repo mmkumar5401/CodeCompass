@@ -586,7 +586,7 @@ def _ensure_opencode_config(repo_path: str) -> None:
 
 
 def ingest_code(repo_path: str, normalize: bool = False, dump_triples: str | None = None,
-                skip_vectors: bool = True, on_progress=None) -> None:
+                skip_vectors: bool = False, on_progress=None) -> None:
     """Ingest a codebase into the local code knowledge graph.
 
     Phase 1: Walk the repo and write the Project → Folder → File skeleton.
@@ -891,7 +891,7 @@ makes sense, and returns a `description` on each entity row.
 
 | Tool | In | Out |
 |---|---|---|
-| `ingest` | `normalize`, `dump_triples`, `skip_vectors` | rebuilds the graph (+ vector index unless skipped), reporting progress |
+| `ingest` | `normalize`, `dump_triples`, `skip_vectors` | rebuilds the graph + vector index (pass `skip_vectors=true` to skip the embeddings), reporting progress |
 | `init` | — | (re)creates `.codecompass/`, `.agents/`, guard hooks, and the per-agent md pointers |
 | `set_repo` / `get_repo` | `repo_path` / — | switch or report the active repo |
 

@@ -79,24 +79,24 @@ def test_ingest_skip_vectors_false_runs_phase5(repo_path, capsys):
         os.unlink(mock_client.storage_path)
 
 
-def test_ingest_default_skip_vectors_is_true():
-    """The function signature should default skip_vectors=True."""
+def test_ingest_default_skip_vectors_is_false():
+    """The vector index builds by default; skip_vectors opts OUT."""
     import inspect
     sig = inspect.signature(main.ingest_code)
-    assert sig.parameters["skip_vectors"].default is True
+    assert sig.parameters["skip_vectors"].default is False
 
 
 # --- MCP ingest tool tests ---
 
 @pytest.mark.asyncio
 async def test_mcp_ingest_default_skip_vectors(configured):
-    """MCP ingest tool should default skip_vectors=True."""
+    """MCP ingest tool should default skip_vectors=False."""
     tools = await server_module.mcp.list_tools()
     ingest_tool = next(t for t in tools if t.name == "ingest")
     # FastMCP exposes input schema via .parameters
     props = ingest_tool.parameters.get("properties", {})
     assert "skip_vectors" in props
-    assert props["skip_vectors"].get("default") is True
+    assert props["skip_vectors"].get("default") is False
 
 
 @pytest.mark.asyncio

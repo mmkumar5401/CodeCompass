@@ -131,7 +131,7 @@ makes sense, and returns a `description` on each entity row.
 
 | Tool | In | Out |
 |---|---|---|
-| `ingest` | `normalize`, `dump_triples`, `skip_vectors` | rebuilds the graph (+ vector index unless skipped), reporting progress |
+| `ingest` | `normalize`, `dump_triples`, `skip_vectors` | rebuilds the graph + vector index (pass `skip_vectors=true` to skip the embeddings), reporting progress |
 | `init` | — | (re)creates `.codecompass/`, `.agents/`, guard hooks, and the per-agent md pointers |
 | `set_repo` / `get_repo` | `repo_path` / — | switch or report the active repo |
 

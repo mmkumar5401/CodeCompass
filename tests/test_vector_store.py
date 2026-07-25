@@ -14,6 +14,10 @@ pytest.importorskip("fastembed")
 
 from graph import vector_store
 
+# conftest stubs index_entities suite-wide (ingest builds vectors by default);
+# these tests exercise the REAL one.
+_real_index_entities = vector_store.index_entities
+
 
 class _FakeEmbedder:
     def embed(self, texts):
@@ -28,6 +32,7 @@ class _FakeEmbedder:
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(vector_store, "index_entities", _real_index_entities)
     monkeypatch.setattr(vector_store, "_embedder", lambda: _FakeEmbedder())
     cc = tmp_path / ".codecompass"
     cc.mkdir()
