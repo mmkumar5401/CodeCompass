@@ -49,3 +49,4 @@ benchmarks/results/*.json
 .codecompass/vectors.tvim
 # CodeCompass vector index payloads (rebuilt on ingest)
 .codecompass/vectors.meta.json
+.codecompass/graph.json
