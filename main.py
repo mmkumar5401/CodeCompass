@@ -134,7 +134,8 @@ _EXPLORATION_CHECKLIST = """\
 - [ ] Explore only through the codecompass tools — `grep`/`search`/`tree` to discover, `flow`/`deps` to understand. Never `grep`/`cat`/`rg` the repo directly.
 - [ ] Trace the `flow` of every code path you are about to touch BEFORE editing.
 - [ ] Run `impact`/`blast_radius` on every symbol and file you will change — before the edit, and again after to confirm the actual fallout.
-- [ ] Graph missing something or wrong? Fix it the moment you notice: `add_entity` / `add_call`.
+- [ ] Graph missing something? Add it the moment you notice: `add_entity` / `add_call`.
+- [ ] Graph wrong about something? Correct it the moment you notice: `modify_relation` for a wrong edge type, `delete_entity` / `delete_call` for wrong or obsolete entries.
 - [ ] `ingest` after every edit session, then flush what you learned into the graph with `add_entity` / `add_call`.
 """
 
